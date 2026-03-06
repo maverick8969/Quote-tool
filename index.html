@@ -433,13 +433,28 @@
 
     <div class="divider"></div>
 
-    <div class="card-title">Bulk Paste</div>
+    <div class="card-title">Bulk Import</div>
+
+    <!-- CSV File Upload -->
     <div class="form-group">
-      <label for="fBulk">One order per line: <span class="muted">ID,Width,Length</span></label>
-      <textarea id="fBulk" rows="4" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:9px 12px;color:var(--text);font-size:0.82rem;resize:vertical;font-family:monospace" placeholder="A,10,300&#10;B,24,300&#10;C,48,200"></textarea>
-      <div class="hint">Columns: ID (opt), Width (in), Length (ft)</div>
+      <label>Upload CSV File <span class="muted">(ID,Width,Length)</span></label>
+      <label id="csvDropZone" for="csvFileInput" style="
+        display:flex;align-items:center;justify-content:center;gap:8px;
+        border:1px dashed var(--border);border-radius:7px;padding:14px;
+        cursor:pointer;transition:border-color 0.15s,background 0.15s;
+        font-size:0.82rem;color:var(--text-muted);">
+        &#128196; Choose CSV or drag &amp; drop
+      </label>
+      <input type="file" id="csvFileInput" accept=".csv,text/csv" style="display:none" onchange="handleCsvFile(this)"/>
+      <div class="hint">Format: one order per row — <code style="font-size:0.75rem;background:var(--surface2);padding:1px 5px;border-radius:3px">ID,Width,Length</code> (header row auto-detected)</div>
     </div>
-    <button class="btn btn-outline" style="width:100%" onclick="bulkAdd()">Import Rows</button>
+
+    <!-- Paste fallback -->
+    <div class="form-group">
+      <label for="fBulk">Or paste rows directly</label>
+      <textarea id="fBulk" rows="3" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:9px 12px;color:var(--text);font-size:0.82rem;resize:vertical;font-family:monospace" placeholder="A,10,300&#10;B,24,300&#10;C,48,200"></textarea>
+    </div>
+    <button class="btn btn-outline" style="width:100%" onclick="bulkAdd()">Import Pasted Rows</button>
   </div>
 
   <!-- Right: Orders + Results -->
@@ -538,6 +553,94 @@ function addOrder() {
   widthEl.focus();
   renderOrders();
 }
+
+// ──────────────────────────────────────────────
+// CSV File Import
+// ──────────────────────────────────────────────
+function handleCsvFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    parseCsvText(e.target.result, file.name);
+    input.value = ''; // reset so same file can be re-imported
+  };
+  reader.readAsText(file);
+}
+
+function parseCsvText(text, sourceName) {
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  if (!lines.length) return;
+
+  // Detect and skip header row: if first row contains non-numeric second/third columns
+  let startIdx = 0;
+  const firstParts = lines[0].split(',').map(s => s.trim());
+  const secondColNum = parseFloat(firstParts[firstParts.length >= 3 ? 1 : 0]);
+  if (isNaN(secondColNum) || (firstParts.length >= 3 && isNaN(parseFloat(firstParts[2])))) {
+    startIdx = 1; // skip header
+  }
+
+  const errors = [];
+  let added = 0;
+  for (let i = startIdx; i < lines.length; i++) {
+    const parts = lines[i].split(',').map(s => s.trim());
+    let id, width, length;
+    if (parts.length >= 3) {
+      id = parts[0] || `ORD-${String(nextSeq).padStart(3,'0')}`;
+      width  = parseFloat(parts[1]);
+      length = parseFloat(parts[2]);
+    } else if (parts.length === 2) {
+      id = `ORD-${String(nextSeq).padStart(3,'0')}`;
+      width  = parseFloat(parts[0]);
+      length = parseFloat(parts[1]);
+    } else {
+      errors.push(`Row ${i+1}: expected 2 or 3 columns`);
+      continue;
+    }
+    if (isNaN(width) || width < 6 || width > 108) { errors.push(`Row ${i+1}: invalid width "${parts[parts.length-2]}"`); continue; }
+    if (isNaN(length) || length < 1 || length > 600) { errors.push(`Row ${i+1}: invalid length "${parts[parts.length-1]}"`); continue; }
+    orders.push({ seq: nextSeq++, id, width, length });
+    added++;
+  }
+
+  renderOrders();
+  const label = document.getElementById('csvDropZone');
+  if (added > 0) {
+    label.textContent = `✓ ${added} order${added!==1?'s':''} imported from ${sourceName || 'CSV'}`;
+    label.style.color = 'var(--green)';
+    label.style.borderColor = 'var(--green)';
+    setTimeout(() => {
+      label.innerHTML = '&#128196; Choose CSV or drag &amp; drop';
+      label.style.color = '';
+      label.style.borderColor = '';
+    }, 3000);
+  }
+  if (errors.length) alert('Some rows skipped:\n' + errors.join('\n'));
+}
+
+// Drag-and-drop on the CSV drop zone
+document.addEventListener('DOMContentLoaded', () => {
+  const zone = document.getElementById('csvDropZone');
+  zone.addEventListener('dragover', e => {
+    e.preventDefault();
+    zone.style.borderColor = 'var(--accent)';
+    zone.style.background  = 'var(--accent-dim)';
+  });
+  zone.addEventListener('dragleave', () => {
+    zone.style.borderColor = '';
+    zone.style.background  = '';
+  });
+  zone.addEventListener('drop', e => {
+    e.preventDefault();
+    zone.style.borderColor = '';
+    zone.style.background  = '';
+    const file = e.dataTransfer.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => parseCsvText(ev.target.result, file.name);
+    reader.readAsText(file);
+  });
+});
 
 function bulkAdd() {
   const text = document.getElementById('fBulk').value.trim();
