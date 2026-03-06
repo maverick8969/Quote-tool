@@ -1,0 +1,912 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Belt Order Layout Optimizer</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #22263a;
+      --border: #2e3350;
+      --accent: #4f7cff;
+      --accent-hover: #6b91ff;
+      --accent-dim: rgba(79,124,255,0.15);
+      --green: #2ecc71;
+      --green-dim: rgba(46,204,113,0.15);
+      --yellow: #f0c040;
+      --yellow-dim: rgba(240,192,64,0.15);
+      --red: #e05555;
+      --red-dim: rgba(224,85,85,0.15);
+      --text: #e2e6f0;
+      --text-muted: #7a8099;
+      --radius: 10px;
+      --shadow: 0 4px 24px rgba(0,0,0,0.4);
+    }
+
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 24px 16px 60px;
+    }
+
+    header {
+      max-width: 960px;
+      margin: 0 auto 32px;
+    }
+    header h1 {
+      font-size: 1.7rem;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      color: #fff;
+    }
+    header p {
+      margin-top: 6px;
+      color: var(--text-muted);
+      font-size: 0.9rem;
+      max-width: 620px;
+      line-height: 1.5;
+    }
+
+    .layout {
+      max-width: 960px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 300px 1fr;
+      gap: 20px;
+      align-items: start;
+    }
+    @media (max-width: 700px) {
+      .layout { grid-template-columns: 1fr; }
+    }
+
+    /* Card */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      box-shadow: var(--shadow);
+    }
+    .card-title {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--text-muted);
+      margin-bottom: 16px;
+    }
+
+    /* Form */
+    .form-group { margin-bottom: 14px; }
+    label {
+      display: block;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      margin-bottom: 5px;
+      font-weight: 500;
+    }
+    input[type="text"], input[type="number"] {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 9px 12px;
+      color: var(--text);
+      font-size: 0.9rem;
+      transition: border-color 0.15s;
+    }
+    input:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    input.error { border-color: var(--red); }
+    .hint {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+    .err-msg {
+      font-size: 0.75rem;
+      color: var(--red);
+      margin-top: 4px;
+      display: none;
+    }
+    .err-msg.visible { display: block; }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 9px 16px;
+      border: none;
+      border-radius: 7px;
+      font-size: 0.88rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+      width: 100%;
+      justify-content: center;
+    }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-primary:active { transform: scale(0.98); }
+    .btn-success {
+      background: var(--green);
+      color: #0a1a10;
+    }
+    .btn-success:hover { filter: brightness(1.1); }
+    .btn-outline {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+    }
+    .btn-outline:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .btn-danger-sm {
+      background: var(--red-dim);
+      color: var(--red);
+      padding: 4px 10px;
+      font-size: 0.78rem;
+      border: 1px solid transparent;
+      border-radius: 5px;
+    }
+    .btn-danger-sm:hover { border-color: var(--red); }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    .btn-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    /* Orders panel */
+    .right-panel { display: flex; flex-direction: column; gap: 20px; }
+
+    .orders-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    .badge {
+      font-size: 0.75rem;
+      font-weight: 600;
+      background: var(--accent-dim);
+      color: var(--accent);
+      border-radius: 20px;
+      padding: 2px 10px;
+    }
+
+    .orders-empty {
+      text-align: center;
+      padding: 28px 0;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+    }
+    th {
+      text-align: left;
+      padding: 8px 10px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border);
+    }
+    td {
+      padding: 9px 10px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: middle;
+    }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: var(--surface2); }
+
+    .mono { font-family: 'Courier New', monospace; font-size: 0.83rem; }
+    .muted { color: var(--text-muted); }
+    .tag {
+      display: inline-block;
+      font-size: 0.7rem;
+      padding: 1px 7px;
+      border-radius: 4px;
+      font-weight: 600;
+    }
+    .tag-accent { background: var(--accent-dim); color: var(--accent); }
+    .tag-green { background: var(--green-dim); color: var(--green); }
+    .tag-yellow { background: var(--yellow-dim); color: var(--yellow); }
+    .tag-red { background: var(--red-dim); color: var(--red); }
+
+    /* Optimize button area */
+    .optimize-bar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    #btnOptimize {
+      flex: 1;
+      min-width: 160px;
+    }
+    #btnClear {
+      white-space: nowrap;
+    }
+
+    /* Results */
+    #results { display: none; }
+    #results.visible { display: block; }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .stat-card {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+    }
+    .stat-card .stat-label {
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+    .stat-card .stat-value {
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: #fff;
+    }
+    .stat-card .stat-sub {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+    .stat-card.accent-card { border-color: var(--accent); }
+    .stat-card.green-card { border-color: var(--green); }
+    .stat-card.yellow-card { border-color: var(--yellow); }
+
+    .belt-section { margin-bottom: 16px; }
+    .belt-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 14px;
+      background: var(--surface2);
+      border-radius: 8px 8px 0 0;
+      border: 1px solid var(--border);
+      border-bottom: none;
+    }
+    .belt-id {
+      font-size: 0.9rem;
+      font-weight: 700;
+      color: var(--accent);
+    }
+    .belt-dims {
+      font-size: 0.82rem;
+      color: var(--text-muted);
+    }
+    .belt-dims span { color: var(--text); font-weight: 600; }
+    .belt-waste-tag { margin-left: auto; }
+
+    .belt-body {
+      border: 1px solid var(--border);
+      border-top: none;
+      border-radius: 0 0 8px 8px;
+      overflow: hidden;
+    }
+
+    .belt-visual {
+      display: flex;
+      height: 36px;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      overflow: hidden;
+    }
+    .belt-seg {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.68rem;
+      font-weight: 700;
+      overflow: hidden;
+      white-space: nowrap;
+      transition: opacity 0.15s;
+      cursor: default;
+    }
+    .belt-seg:hover { opacity: 0.85; }
+    .belt-waste-seg {
+      background: repeating-linear-gradient(
+        45deg,
+        rgba(224,85,85,0.08),
+        rgba(224,85,85,0.08) 4px,
+        rgba(224,85,85,0.03) 4px,
+        rgba(224,85,85,0.03) 8px
+      );
+      border-left: 1px dashed rgba(224,85,85,0.3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.65rem;
+      color: rgba(224,85,85,0.5);
+      overflow: hidden;
+    }
+
+    /* infeasible section */
+    .infeasible-card {
+      background: var(--red-dim);
+      border: 1px solid var(--red);
+      border-radius: 8px;
+      padding: 14px 16px;
+      margin-bottom: 16px;
+    }
+    .infeasible-card h4 { color: var(--red); font-size: 0.85rem; margin-bottom: 8px; }
+
+    /* Notes */
+    .notes-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+    .notes-list li {
+      font-size: 0.83rem;
+      color: var(--text-muted);
+      padding: 8px 12px;
+      background: var(--surface2);
+      border-radius: 6px;
+      border-left: 3px solid var(--border);
+      line-height: 1.45;
+    }
+    .notes-list li.note-info { border-left-color: var(--accent); }
+    .notes-list li.note-warn { border-left-color: var(--yellow); }
+    .notes-list li.note-good { border-left-color: var(--green); }
+
+    /* Scrollable belt orders table */
+    .belt-table-wrap { overflow-x: auto; }
+
+    /* Tooltip */
+    [title] { cursor: help; }
+
+    /* Divider */
+    .divider {
+      height: 1px;
+      background: var(--border);
+      margin: 20px 0;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Belt Order Layout Optimizer</h1>
+  <p>Enter customer orders and automatically determine the most efficient belt widths and lengths to manufacture, minimizing material waste and production runs.</p>
+</header>
+
+<div class="layout">
+  <!-- Left: Input Form -->
+  <div class="card">
+    <div class="card-title">Add Order</div>
+
+    <div class="form-group">
+      <label for="fOrderId">Order ID <span class="muted">(optional)</span></label>
+      <input type="text" id="fOrderId" placeholder="e.g. ORD-001" maxlength="32" />
+    </div>
+
+    <div class="form-group">
+      <label for="fWidth">Order Width (inches)</label>
+      <input type="number" id="fWidth" placeholder="e.g. 24" min="6" max="108" step="0.5" />
+      <div class="hint">Range: 6 – 108 in</div>
+      <div class="err-msg" id="errWidth">Width must be between 6 and 108 inches.</div>
+    </div>
+
+    <div class="form-group">
+      <label for="fLength">Order Length (feet)</label>
+      <input type="number" id="fLength" placeholder="e.g. 300" min="1" max="600" step="1" />
+      <div class="hint">Range: 1 – 600 ft &nbsp;·&nbsp; Orders &lt; 100 ft are flagged</div>
+      <div class="err-msg" id="errLength">Length must be between 1 and 600 feet.</div>
+    </div>
+
+    <button class="btn btn-primary" id="btnAdd" onclick="addOrder()">
+      + Add Order
+    </button>
+
+    <div class="divider"></div>
+
+    <div class="card-title">Bulk Paste</div>
+    <div class="form-group">
+      <label for="fBulk">One order per line: <span class="muted">ID,Width,Length</span></label>
+      <textarea id="fBulk" rows="4" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:9px 12px;color:var(--text);font-size:0.82rem;resize:vertical;font-family:monospace" placeholder="A,10,300&#10;B,24,300&#10;C,48,200"></textarea>
+      <div class="hint">Columns: ID (opt), Width (in), Length (ft)</div>
+    </div>
+    <button class="btn btn-outline" style="width:100%" onclick="bulkAdd()">Import Rows</button>
+  </div>
+
+  <!-- Right: Orders + Results -->
+  <div class="right-panel">
+    <!-- Orders Table -->
+    <div class="card">
+      <div class="orders-header">
+        <div class="card-title" style="margin-bottom:0">Orders</div>
+        <span class="badge" id="orderCount">0 orders</span>
+      </div>
+
+      <div id="ordersEmpty" class="orders-empty">
+        No orders yet — add one using the form.
+      </div>
+
+      <div id="ordersTableWrap" style="display:none; overflow-x:auto;">
+        <table id="ordersTable">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Order ID</th>
+              <th title="Customer order width">Width (in)</th>
+              <th title="Customer order length">Length (ft)</th>
+              <th title="Width + 0.5&quot; margin">Req Width</th>
+              <th title="Length + 0.5ft margin">Req Length</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="ordersBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Optimize Controls -->
+    <div class="optimize-bar">
+      <button class="btn btn-success" id="btnOptimize" onclick="runOptimize()" disabled>
+        &#9654; Optimize Layout
+      </button>
+      <button class="btn btn-outline" id="btnClear" onclick="clearAll()">Clear All</button>
+    </div>
+
+    <!-- Results -->
+    <div id="results">
+      <div class="card">
+        <div class="card-title">Optimization Result</div>
+
+        <div id="infeasibleSection"></div>
+
+        <div class="summary-grid" id="summaryGrid"></div>
+
+        <div class="divider"></div>
+        <div class="card-title">Belt Layout</div>
+        <div id="beltLayouts"></div>
+
+        <div class="divider"></div>
+        <div class="card-title">Notes &amp; Recommendations</div>
+        <ul class="notes-list" id="notesList"></ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ──────────────────────────────────────────────
+// State
+// ──────────────────────────────────────────────
+let orders = [];
+let nextSeq = 1;
+
+// ──────────────────────────────────────────────
+// Order Management
+// ──────────────────────────────────────────────
+function addOrder() {
+  const idEl    = document.getElementById('fOrderId');
+  const widthEl = document.getElementById('fWidth');
+  const lenEl   = document.getElementById('fLength');
+
+  const width  = parseFloat(widthEl.value);
+  const length = parseFloat(lenEl.value);
+
+  let valid = true;
+  clearFieldErrors();
+
+  if (isNaN(width) || width < 6 || width > 108) {
+    showErr('errWidth'); widthEl.classList.add('error'); valid = false;
+  }
+  if (isNaN(length) || length < 1 || length > 600) {
+    showErr('errLength'); lenEl.classList.add('error'); valid = false;
+  }
+  if (!valid) return;
+
+  const orderId = idEl.value.trim() || `ORD-${String(nextSeq).padStart(3,'0')}`;
+  orders.push({ seq: nextSeq++, id: orderId, width, length });
+
+  idEl.value = ''; widthEl.value = ''; lenEl.value = '';
+  widthEl.focus();
+  renderOrders();
+}
+
+function bulkAdd() {
+  const text = document.getElementById('fBulk').value.trim();
+  if (!text) return;
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  const errors = [];
+  lines.forEach((line, i) => {
+    const parts = line.split(',').map(s => s.trim());
+    let id, width, length;
+    if (parts.length === 3) {
+      id = parts[0]; width = parseFloat(parts[1]); length = parseFloat(parts[2]);
+    } else if (parts.length === 2) {
+      id = `ORD-${String(nextSeq).padStart(3,'0')}`;
+      width = parseFloat(parts[0]); length = parseFloat(parts[1]);
+    } else { errors.push(`Line ${i+1}: expected 2 or 3 columns`); return; }
+
+    if (isNaN(width) || width < 6 || width > 108) { errors.push(`Line ${i+1}: invalid width "${parts[parts.length-2]}"`); return; }
+    if (isNaN(length) || length < 1 || length > 600) { errors.push(`Line ${i+1}: invalid length "${parts[parts.length-1]}"`); return; }
+    orders.push({ seq: nextSeq++, id, width, length });
+  });
+  document.getElementById('fBulk').value = '';
+  renderOrders();
+  if (errors.length) alert('Some rows skipped:\n' + errors.join('\n'));
+}
+
+function removeOrder(seq) {
+  orders = orders.filter(o => o.seq !== seq);
+  renderOrders();
+  document.getElementById('results').classList.remove('visible');
+}
+
+function clearAll() {
+  orders = [];
+  nextSeq = 1;
+  renderOrders();
+  document.getElementById('results').classList.remove('visible');
+}
+
+function renderOrders() {
+  const empty = document.getElementById('ordersEmpty');
+  const wrap  = document.getElementById('ordersTableWrap');
+  const tbody = document.getElementById('ordersBody');
+  const count = document.getElementById('orderCount');
+  const btn   = document.getElementById('btnOptimize');
+
+  count.textContent = `${orders.length} order${orders.length !== 1 ? 's' : ''}`;
+  btn.disabled = orders.length === 0;
+
+  if (orders.length === 0) {
+    empty.style.display = 'block';
+    wrap.style.display  = 'none';
+    return;
+  }
+  empty.style.display = 'none';
+  wrap.style.display  = 'block';
+
+  tbody.innerHTML = orders.map(o => {
+    const rw = o.width + 0.5;
+    const rl = o.length + 0.5;
+    const warnLen = o.length < 100;
+    return `<tr>
+      <td class="muted mono">${o.seq}</td>
+      <td><strong>${esc(o.id)}</strong></td>
+      <td class="mono">${o.width}"</td>
+      <td class="mono">${o.length}'${warnLen ? ' <span class="tag tag-yellow" title="Length &lt; 100ft: must be produced lengthwise">⚠</span>' : ''}</td>
+      <td class="mono">${rw}"</td>
+      <td class="mono">${rl}'</td>
+      <td><button class="btn btn-danger-sm" onclick="removeOrder(${o.seq})">Remove</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function clearFieldErrors() {
+  ['fWidth','fLength'].forEach(id => document.getElementById(id).classList.remove('error'));
+  ['errWidth','errLength'].forEach(id => document.getElementById(id).classList.remove('visible'));
+}
+function showErr(id) { document.getElementById(id).classList.add('visible'); }
+
+// Enter key on inputs
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && ['fOrderId','fWidth','fLength'].includes(e.target.id)) addOrder();
+});
+
+// ──────────────────────────────────────────────
+// Optimization Engine
+// ──────────────────────────────────────────────
+const MAX_WIDTH = 108;
+const MIN_WIDTH = 48;
+const SEG_COLORS = [
+  ['#4f7cff','#0a1540'],['#2ecc71','#071a0e'],['#e67e22','#1a0b00'],
+  ['#9b59b6','#130a1a'],['#1abc9c','#051510'],['#e91e63','#1a0510'],
+  ['#f0c040','#1a1400'],['#00bcd4','#001a1e'],['#ff5722','#1a0900'],
+  ['#8bc34a','#0f1a04'],['#ff9800','#1a0e00'],['#03a9f4','#00111a'],
+];
+
+function optimizeBelts(rawOrders) {
+  // Compute required dimensions
+  const processed = rawOrders.map(o => ({
+    ...o,
+    reqWidth:  o.width  + 0.5,
+    reqLength: o.length + 0.5,
+    flagLengthwise: o.length < 100,
+  }));
+
+  // Split infeasible (required width > MAX_WIDTH)
+  const infeasible = processed.filter(o => o.reqWidth > MAX_WIDTH);
+  const feasible   = processed.filter(o => o.reqWidth <= MAX_WIDTH);
+
+  // Sort: width desc, then length desc (Best Fit Decreasing)
+  const sorted = [...feasible].sort((a, b) =>
+    b.reqWidth - a.reqWidth || b.reqLength - a.reqLength
+  );
+
+  // Bin-pack using Best Fit Decreasing on width
+  // Each bin tracks total required width and max required length
+  const bins = []; // { orders[], totalReqWidth, maxReqLength }
+
+  for (const order of sorted) {
+    let bestBin = null;
+    let bestSlack = Infinity;
+
+    for (const bin of bins) {
+      const newTotal = bin.totalReqWidth + order.reqWidth;
+      const slack = MAX_WIDTH - newTotal;
+      if (slack >= 0 && slack < bestSlack) {
+        bestBin   = bin;
+        bestSlack = slack;
+      }
+    }
+
+    if (bestBin) {
+      bestBin.orders.push(order);
+      bestBin.totalReqWidth += order.reqWidth;
+      bestBin.maxReqLength   = Math.max(bestBin.maxReqLength, order.reqLength);
+    } else {
+      bins.push({
+        orders:        [order],
+        totalReqWidth: order.reqWidth,
+        maxReqLength:  order.reqLength,
+      });
+    }
+  }
+
+  // Build belt results
+  const belts = bins.map((bin, i) => {
+    // Belt width: smallest feasible value (min 48", max 108")
+    const beltWidth  = Math.max(MIN_WIDTH, bin.totalReqWidth);
+    const beltLength = bin.maxReqLength; // already at 0.5' precision
+
+    // Areas in sq ft
+    const totalArea  = (beltWidth  / 12) * beltLength;
+    const usedArea   = (bin.totalReqWidth / 12) * beltLength;
+    const wasteArea  = totalArea - usedArea;
+    const wastePct   = totalArea > 0 ? (wasteArea / totalArea * 100) : 0;
+
+    return {
+      id:            `Belt-${i + 1}`,
+      beltWidth,
+      beltLength,
+      orders:        bin.orders,
+      totalReqWidth: bin.totalReqWidth,
+      unusedWidth:   beltWidth - bin.totalReqWidth,
+      totalArea,
+      usedArea,
+      wasteArea,
+      wastePct,
+    };
+  });
+
+  return { belts, infeasible };
+}
+
+// ──────────────────────────────────────────────
+// Render Results
+// ──────────────────────────────────────────────
+function runOptimize() {
+  if (orders.length === 0) return;
+
+  const { belts, infeasible } = optimizeBelts(orders);
+
+  renderInfeasible(infeasible);
+  renderSummary(belts);
+  renderBelts(belts);
+  renderNotes(belts, infeasible);
+
+  const resultsEl = document.getElementById('results');
+  resultsEl.classList.add('visible');
+  setTimeout(() => resultsEl.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+}
+
+function renderInfeasible(infeasible) {
+  const el = document.getElementById('infeasibleSection');
+  if (!infeasible.length) { el.innerHTML = ''; return; }
+  el.innerHTML = `
+    <div class="infeasible-card">
+      <h4>&#9888; Infeasible Orders (cannot be manufactured)</h4>
+      <p style="font-size:0.82rem;color:var(--text-muted);margin-bottom:8px">
+        These orders require a belt wider than the maximum 108″ and cannot be produced as specified.
+      </p>
+      <table><thead><tr><th>Order ID</th><th>Width (in)</th><th>Req Width</th><th>Issue</th></tr></thead>
+      <tbody>${infeasible.map(o => `<tr>
+        <td>${esc(o.id)}</td>
+        <td class="mono">${o.width}"</td>
+        <td class="mono">${o.reqWidth}"</td>
+        <td style="color:var(--red);font-size:0.8rem">Exceeds 108″ max</td>
+      </tr>`).join('')}</tbody></table>
+    </div>`;
+}
+
+function renderSummary(belts) {
+  const totalArea  = belts.reduce((s, b) => s + b.totalArea,  0);
+  const totalWaste = belts.reduce((s, b) => s + b.wasteArea,  0);
+  const overallPct = totalArea > 0 ? (totalWaste / totalArea * 100) : 0;
+
+  document.getElementById('summaryGrid').innerHTML = `
+    <div class="stat-card accent-card">
+      <div class="stat-label">Belts to Manufacture</div>
+      <div class="stat-value">${belts.length}</div>
+      <div class="stat-sub">production runs</div>
+    </div>
+    <div class="stat-card green-card">
+      <div class="stat-label">Total Material</div>
+      <div class="stat-value">${fmt(totalArea)}</div>
+      <div class="stat-sub">sq ft produced</div>
+    </div>
+    <div class="stat-card yellow-card">
+      <div class="stat-label">Total Waste</div>
+      <div class="stat-value">${fmt(totalWaste)}</div>
+      <div class="stat-sub">sq ft (${overallPct.toFixed(1)}% of total)</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Orders Placed</div>
+      <div class="stat-value">${belts.reduce((s,b)=>s+b.orders.length,0)}</div>
+      <div class="stat-sub">across all belts</div>
+    </div>`;
+}
+
+function renderBelts(belts) {
+  const el = document.getElementById('beltLayouts');
+  el.innerHTML = belts.map((belt, bi) => {
+    const colorAssign = {};
+    let ci = 0;
+    belt.orders.forEach(o => { colorAssign[o.seq] = SEG_COLORS[ci++ % SEG_COLORS.length]; });
+
+    // Visual bar
+    const segments = belt.orders.map(o => {
+      const pct = (o.reqWidth / belt.beltWidth * 100).toFixed(2);
+      const [bg, fg] = colorAssign[o.seq];
+      return `<div class="belt-seg" style="width:${pct}%;background:${bg};color:${fg}"
+               title="${esc(o.id)}: ${o.reqWidth}&quot; wide">${pct > 5 ? esc(o.id) : ''}</div>`;
+    }).join('');
+    const wastePct = (belt.unusedWidth / belt.beltWidth * 100).toFixed(2);
+    const wasteBar = belt.unusedWidth > 0
+      ? `<div class="belt-waste-seg" style="flex:1" title="Waste: ${fmt2(belt.unusedWidth)}&quot;">WASTE</div>`
+      : '';
+
+    // Orders rows
+    const rows = belt.orders.map((o, oi) => {
+      const [bg] = colorAssign[o.seq];
+      const isLongest = o.reqLength === belt.beltLength;
+      return `<tr>
+        <td><span class="tag" style="background:${bg}20;color:${bg}">${esc(o.id)}</span></td>
+        <td class="mono">${o.width}"</td>
+        <td class="mono">${o.length}'</td>
+        <td class="mono">${o.reqWidth}"</td>
+        <td class="mono">${o.reqLength}'</td>
+        <td class="mono" style="color:${fmt2((o.reqWidth / belt.beltWidth * 100))}%">${(o.reqWidth / belt.beltWidth * 100).toFixed(1)}%</td>
+        ${isLongest ? '<td><span class="tag tag-accent">sets length</span></td>' : '<td></td>'}
+        ${o.flagLengthwise ? '<td><span class="tag tag-yellow" title="Must be produced lengthwise">lengthwise</span></td>' : '<td></td>'}
+      </tr>`;
+    }).join('');
+
+    const wasteTag = belt.wastePct < 5
+      ? `<span class="tag tag-green">${belt.wastePct.toFixed(1)}% waste</span>`
+      : belt.wastePct < 20
+      ? `<span class="tag tag-yellow">${belt.wastePct.toFixed(1)}% waste</span>`
+      : `<span class="tag tag-red">${belt.wastePct.toFixed(1)}% waste</span>`;
+
+    return `
+    <div class="belt-section">
+      <div class="belt-header">
+        <div class="belt-id">${belt.id}</div>
+        <div class="belt-dims">
+          <span>${fmt2(belt.beltWidth)}"</span> wide &times; <span>${fmt2(belt.beltLength)}'</span> long
+          &nbsp;·&nbsp; ${belt.orders.length} order${belt.orders.length!==1?'s':''}
+          &nbsp;·&nbsp; ${fmt2(belt.totalReqWidth)}" of ${fmt2(belt.beltWidth)}" used
+        </div>
+        <div class="belt-waste-tag">${wasteTag}</div>
+      </div>
+      <div class="belt-body">
+        <div class="belt-visual">${segments}${wasteBar}</div>
+        <div class="belt-table-wrap">
+          <table>
+            <thead><tr>
+              <th>Order</th><th>Width (in)</th><th>Length (ft)</th>
+              <th>Req Width</th><th>Req Length</th><th>% of Belt</th>
+              <th>Note</th><th>Flag</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+          <div style="padding:10px 10px 12px;display:flex;gap:16px;flex-wrap:wrap">
+            <div style="font-size:0.78rem;color:var(--text-muted)">
+              Manufacture: <strong style="color:var(--text)">${fmt2(belt.beltWidth)}" × ${fmt2(belt.beltLength)}'</strong>
+              &nbsp;= <strong style="color:var(--text)">${fmt(belt.totalArea)} sq ft</strong>
+            </div>
+            <div style="font-size:0.78rem;color:var(--text-muted)">
+              Waste: <strong style="color:var(--red)">${fmt2(belt.unusedWidth)}" × ${fmt2(belt.beltLength)}' = ${fmt(belt.wasteArea)} sq ft</strong>
+              (${belt.wastePct.toFixed(1)}%)
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderNotes(belts, infeasible) {
+  const notes = [];
+
+  if (infeasible.length) {
+    notes.push({ cls: 'note-warn', text: `${infeasible.length} order(s) could not be scheduled because their required width exceeds the 108″ manufacturing maximum. Review these orders with your customer.` });
+  }
+
+  const totalWaste = belts.reduce((s,b)=>s+b.wasteArea,0);
+  const totalArea  = belts.reduce((s,b)=>s+b.totalArea,0);
+  const pct = totalArea > 0 ? totalWaste/totalArea*100 : 0;
+
+  if (pct < 5) {
+    notes.push({ cls: 'note-good', text: `Excellent efficiency — overall waste is only ${pct.toFixed(1)}%. Orders were packed very tightly.` });
+  } else if (pct < 15) {
+    notes.push({ cls: 'note-info', text: `Good efficiency — overall waste is ${pct.toFixed(1)}%. Minor adjustments to order widths or grouping could improve this further.` });
+  } else {
+    notes.push({ cls: 'note-warn', text: `Waste is ${pct.toFixed(1)}% of total material. Consider whether orders can be combined differently, or if minimum belt width (48″) is the limiting factor.` });
+  }
+
+  // Wide-waste belts
+  belts.filter(b => b.wastePct > 25).forEach(b => {
+    notes.push({ cls: 'note-warn', text: `${b.id} has ${b.wastePct.toFixed(1)}% waste (${fmt2(b.unusedWidth)}" unused). Consider pairing it with a future order ~${fmt2(b.unusedWidth - 0.5)}" wide or narrower.` });
+  });
+
+  // Min-width-constrained belts
+  belts.filter(b => b.totalReqWidth < MIN_WIDTH && b.unusedWidth > 0).forEach(b => {
+    notes.push({ cls: 'note-info', text: `${b.id} is constrained to the 48″ minimum belt width. Order widths only sum to ${fmt2(b.totalReqWidth)}" — consider adding orders to this belt to reduce waste.` });
+  });
+
+  // Lengthwise-only orders
+  const lw = belts.flatMap(b => b.orders).filter(o => o.flagLengthwise);
+  if (lw.length) {
+    notes.push({ cls: 'note-warn', text: `${lw.length} order(s) have a length < 100 ft and must be produced lengthwise (cannot be placed across the belt width): ${lw.map(o=>o.id).join(', ')}.` });
+  }
+
+  if (belts.length > 0 && infeasible.length === 0) {
+    notes.push({ cls: 'note-info', text: `The optimizer used a Best Fit Decreasing algorithm on belt width to minimize the number of production runs. All orders have a 0.5″ width margin and 0.5′ length margin applied.` });
+  }
+
+  const ul = document.getElementById('notesList');
+  ul.innerHTML = notes.length
+    ? notes.map(n => `<li class="${n.cls}">${n.text}</li>`).join('')
+    : '<li class="note-good">No issues to report.</li>';
+}
+
+// ──────────────────────────────────────────────
+// Helpers
+// ──────────────────────────────────────────────
+function fmt(n)  { return n.toFixed(1); }
+function fmt2(n) { return Number.isInteger(n) ? String(n) : n.toFixed(1); }
+function esc(s)  {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+</body>
+</html>
