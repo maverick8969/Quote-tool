@@ -316,40 +316,131 @@
       overflow: hidden;
     }
 
-    .belt-visual {
-      display: flex;
-      height: 36px;
-      background: var(--bg);
+    /* 2-D slab canvas */
+    .slab-vis-outer {
+      padding: 10px 14px 6px;
       border-bottom: 1px solid var(--border);
+    }
+    .slab-vis-wrap {
+      display: flex;
+      gap: 6px;
+      align-items: stretch;
+    }
+    .slab-y-axis {
+      flex-shrink: 0;
+      width: 34px;
+      height: 172px; /* must match .slab-canvas height */
+      position: relative;
+      align-self: flex-start;
+    }
+    .slab-y-tick {
+      position: absolute;
+      right: 5px;
+      transform: translateY(-50%);
+      font-size: 0.58rem;
+      font-family: 'Courier New', monospace;
+      color: var(--text-muted);
+      white-space: nowrap;
+      line-height: 1;
+    }
+    .slab-canvas-col { flex: 1; min-width: 0; }
+    .slab-canvas {
+      position: relative;
+      width: 100%;
+      height: 172px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
       overflow: hidden;
     }
-    .belt-seg {
+    .slab-order {
+      position: absolute;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 0.68rem;
-      font-weight: 700;
       overflow: hidden;
-      white-space: nowrap;
+      border-right: 1px solid rgba(0,0,0,0.3);
+      border-bottom: 1px solid rgba(0,0,0,0.25);
+      box-sizing: border-box;
+      cursor: default;
       transition: opacity 0.15s;
+    }
+    .slab-order:hover { opacity: 0.8; z-index: 2; }
+    .slab-order-label {
+      font-size: 0.62rem;
+      font-weight: 700;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      padding: 0 3px;
+      pointer-events: none;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.4);
+    }
+    .slab-len-waste {
+      position: absolute;
+      background: repeating-linear-gradient(
+        -45deg,
+        rgba(100,110,140,0.10),
+        rgba(100,110,140,0.10) 3px,
+        rgba(100,110,140,0.03) 3px,
+        rgba(100,110,140,0.03) 7px
+      );
+      border-left: 1px dashed rgba(120,130,160,0.22);
+      box-sizing: border-box;
       cursor: default;
     }
-    .belt-seg:hover { opacity: 0.85; }
-    .belt-waste-seg {
+    .slab-wid-waste {
+      position: absolute;
       background: repeating-linear-gradient(
-        45deg,
-        rgba(224,85,85,0.08),
-        rgba(224,85,85,0.08) 4px,
-        rgba(224,85,85,0.03) 4px,
-        rgba(224,85,85,0.03) 8px
+        -45deg,
+        rgba(224,85,85,0.13),
+        rgba(224,85,85,0.13) 3px,
+        rgba(224,85,85,0.04) 3px,
+        rgba(224,85,85,0.04) 7px
       );
-      border-left: 1px dashed rgba(224,85,85,0.3);
+      border-top: 1px dashed rgba(224,85,85,0.35);
+      box-sizing: border-box;
+      cursor: default;
+    }
+    .slab-grid-line {
+      position: absolute;
+      top: 0; bottom: 0;
+      border-left: 1px dashed rgba(255,255,255,0.055);
+      pointer-events: none;
+    }
+    .slab-x-axis {
+      position: relative;
+      height: 18px;
+      margin-top: 3px;
+      font-size: 0.6rem;
+      font-family: 'Courier New', monospace;
+      color: var(--text-muted);
+    }
+    .slab-x-tick {
+      position: absolute;
+      transform: translateX(-50%);
+      white-space: nowrap;
+    }
+    .slab-x-tick-first { position: absolute; left: 0; transform: none; }
+    .slab-x-tick-last  { position: absolute; right: 0; transform: none; }
+    .slab-legend {
+      display: flex;
+      gap: 14px;
+      padding: 6px 0 2px;
+      font-size: 0.67rem;
+      color: var(--text-muted);
+      flex-wrap: wrap;
+    }
+    .slab-legend-item {
       display: flex;
       align-items: center;
-      justify-content: center;
-      font-size: 0.65rem;
-      color: rgba(224,85,85,0.5);
-      overflow: hidden;
+      gap: 5px;
+    }
+    .slab-legend-swatch {
+      width: 14px;
+      height: 10px;
+      border-radius: 2px;
+      flex-shrink: 0;
     }
 
     /* infeasible section */
@@ -925,6 +1016,89 @@ function renderSummary(belts) {
     </div>`;
 }
 
+function buildSlabCanvas(belt, colorAssign) {
+  // Determine length-axis tick interval based on belt length
+  const len = belt.beltLength;
+  const tick = len <= 50 ? 10 : len <= 150 ? 25 : len <= 300 ? 50 : 100;
+
+  // Grid lines
+  let gridLines = '';
+  for (let t = tick; t < len; t += tick) {
+    const pct = (t / len * 100).toFixed(4);
+    gridLines += `<div class="slab-grid-line" style="left:${pct}%"></div>`;
+  }
+
+  // Order blocks and length-waste blocks
+  let cells = '';
+  let yPct = 0;
+  let cumW = 0;
+  // Start tick at the top edge (0")
+  let yTicks = `<div class="slab-y-tick" style="top:0%">0"</div>`;
+
+  belt.orders.forEach(o => {
+    const [bg, fg] = colorAssign[o.seq];
+    const hPct = (o.reqWidth  / belt.beltWidth  * 100);
+    const wPct = (o.reqLength / belt.beltLength * 100);
+
+    cells += `<div class="slab-order" style="left:0;top:${yPct.toFixed(4)}%;width:${wPct.toFixed(4)}%;height:${hPct.toFixed(4)}%;background:${bg};color:${fg};"
+        title="${esc(o.id)}: ${fmt2(o.reqWidth)}&quot; wide × ${fmt2(o.reqLength)}' long&#10;(${(o.reqWidth/belt.beltWidth*100).toFixed(1)}% of belt width, ${(o.reqLength/belt.beltLength*100).toFixed(1)}% of belt length)"
+      ><span class="slab-order-label">${esc(o.id)}</span></div>`;
+
+    // Length-waste lane (unused length in this width strip)
+    if (o.reqLength < belt.beltLength) {
+      cells += `<div class="slab-len-waste" style="left:${wPct.toFixed(4)}%;top:${yPct.toFixed(4)}%;width:${(100-wPct).toFixed(4)}%;height:${hPct.toFixed(4)}%;"
+          title="${esc(o.id)} length waste: ${fmt2(belt.beltLength - o.reqLength)}' unused in this lane"></div>`;
+    }
+
+    yPct += hPct;
+    cumW += o.reqWidth;
+    // Y-axis tick at the bottom boundary of this order
+    yTicks += `<div class="slab-y-tick" style="top:${yPct.toFixed(4)}%">${fmt2(cumW)}"</div>`;
+  });
+
+  // Width-waste block
+  if (belt.unusedWidth > 0) {
+    const wwH = (belt.unusedWidth / belt.beltWidth * 100).toFixed(4);
+    cells += `<div class="slab-wid-waste" style="left:0;top:${yPct.toFixed(4)}%;width:100%;height:${wwH}%;"
+        title="Width waste: ${fmt2(belt.unusedWidth)}&quot; unused across full ${fmt2(belt.beltLength)}' = ${fmt(belt.wasteArea)} sq ft"></div>`;
+  }
+
+  // X-axis labels
+  let xTicks = `<span class="slab-x-tick-first">0'</span>`;
+  for (let t = tick; t < len; t += tick) {
+    const pct = (t / len * 100).toFixed(3);
+    xTicks += `<span class="slab-x-tick" style="left:${pct}%">${t}'</span>`;
+  }
+  xTicks += `<span class="slab-x-tick-last">${fmt2(len)}'</span>`;
+
+  // Legend entries (unique per belt render)
+  const legendOrders = belt.orders.map(o => {
+    const [bg] = colorAssign[o.seq];
+    return `<span class="slab-legend-item">
+      <span class="slab-legend-swatch" style="background:${bg}"></span>${esc(o.id)}
+    </span>`;
+  }).join('');
+  const legendExtras = `
+    <span class="slab-legend-item">
+      <span class="slab-legend-swatch" style="background:repeating-linear-gradient(-45deg,rgba(100,110,140,0.25),rgba(100,110,140,0.25) 3px,rgba(100,110,140,0.08) 3px,rgba(100,110,140,0.08) 7px)"></span>Length waste
+    </span>` + (belt.unusedWidth > 0 ? `
+    <span class="slab-legend-item">
+      <span class="slab-legend-swatch" style="background:repeating-linear-gradient(-45deg,rgba(224,85,85,0.3),rgba(224,85,85,0.3) 3px,rgba(224,85,85,0.08) 3px,rgba(224,85,85,0.08) 7px)"></span>Width waste
+    </span>` : '');
+
+  return `
+    <div class="slab-vis-outer">
+      <div class="slab-vis-wrap">
+        <div class="slab-y-axis">${yTicks}</div>
+        <div class="slab-canvas-col">
+          <div class="slab-canvas">${gridLines}${cells}</div>
+          <div class="slab-x-axis">${xTicks}</div>
+        </div>
+      </div>
+      <div class="slab-legend">${legendOrders}${legendExtras}</div>
+    </div>`;
+}
+
 function renderBelts(belts) {
   const el = document.getElementById('beltLayouts');
   el.innerHTML = belts.map((belt, bi) => {
@@ -932,20 +1106,8 @@ function renderBelts(belts) {
     let ci = 0;
     belt.orders.forEach(o => { colorAssign[o.seq] = SEG_COLORS[ci++ % SEG_COLORS.length]; });
 
-    // Visual bar
-    const segments = belt.orders.map(o => {
-      const pct = (o.reqWidth / belt.beltWidth * 100).toFixed(2);
-      const [bg, fg] = colorAssign[o.seq];
-      return `<div class="belt-seg" style="width:${pct}%;background:${bg};color:${fg}"
-               title="${esc(o.id)}: ${o.reqWidth}&quot; wide">${pct > 5 ? esc(o.id) : ''}</div>`;
-    }).join('');
-    const wastePct = (belt.unusedWidth / belt.beltWidth * 100).toFixed(2);
-    const wasteBar = belt.unusedWidth > 0
-      ? `<div class="belt-waste-seg" style="flex:1" title="Waste: ${fmt2(belt.unusedWidth)}&quot;">WASTE</div>`
-      : '';
-
-    // Orders rows
-    const rows = belt.orders.map((o, oi) => {
+    // Orders table rows
+    const rows = belt.orders.map(o => {
       const [bg] = colorAssign[o.seq];
       const isLongest = o.reqLength === belt.beltLength;
       return `<tr>
@@ -978,12 +1140,12 @@ function renderBelts(belts) {
         <div class="belt-waste-tag">${wasteTag}</div>
       </div>
       <div class="belt-body">
-        <div class="belt-visual">${segments}${wasteBar}</div>
+        ${buildSlabCanvas(belt, colorAssign)}
         <div class="belt-table-wrap">
           <table>
             <thead><tr>
               <th>Order</th><th>Width (in)</th><th>Length (ft)</th>
-              <th>Req Width</th><th>Req Length</th><th>% of Belt</th>
+              <th>Req Width</th><th>Req Length</th><th>% of Width</th>
               <th>Note</th><th>Flag</th>
             </tr></thead>
             <tbody>${rows}</tbody>
