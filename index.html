@@ -791,8 +791,8 @@ function optimizeBelts(rawOrders) {
     const beltLength = bin.maxReqLength; // already at 0.5' precision
 
     // Areas in sq ft
-    const totalArea  = (beltWidth  / 12) * beltLength;
-    const usedArea   = (bin.totalReqWidth / 12) * beltLength;
+    const totalArea  = (beltWidth / 12) * beltLength;
+    const usedArea   = bin.orders.reduce((sum, o) => sum + (o.reqWidth / 12) * o.reqLength, 0);
     const wasteArea  = totalArea - usedArea;
     const wastePct   = totalArea > 0 ? (wasteArea / totalArea * 100) : 0;
 
