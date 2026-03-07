@@ -731,6 +731,18 @@ function splitCsvLine(line) {
 // Normalize a header string: lowercase, strip all non-alphanumeric chars
 function normHdr(s) { return s.toLowerCase().replace(/[^a-z0-9]+/g, ''); }
 
+// Parse a length value that may use a mixed feet/inches notation (e.g. "24' 8"" or "60' 10"").
+// parseFloat() alone truncates at the apostrophe, silently losing fractional inches.
+// Returns decimal feet.
+function parseLengthFt(str) {
+  str = String(str).trim();
+  // Match: 24' 8   or   24' 8"   or   24'8   (feet then inches, with optional trailing quote)
+  const m = str.match(/^(\d+(?:\.\d+)?)'[\s]*(\d+(?:\.\d+)?)["']?$/);
+  if (m) return parseFloat(m[1]) + parseFloat(m[2]) / 12;
+  // Plain feet (e.g. "21'" or "21") — parseFloat handles these correctly
+  return parseFloat(str);
+}
+
 function parseCsvText(text, sourceName) {
   const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
   if (!lines.length) return;
@@ -778,11 +790,11 @@ function parseCsvText(text, sourceName) {
       if (parts.length >= 3) {
         id = parts[0] || `ORD-${String(nextSeq).padStart(3,'0')}`;
         width  = parseFloat(parts[1]);
-        length = parseFloat(parts[2]);
+        length = parseLengthFt(parts[2]);
       } else if (parts.length === 2) {
         id = `ORD-${String(nextSeq).padStart(3,'0')}`;
         width  = parseFloat(parts[0]);
-        length = parseFloat(parts[1]);
+        length = parseLengthFt(parts[1]);
       } else {
         errors.push(`Row ${i+1}: expected at least 2 columns`);
         continue;
@@ -790,7 +802,7 @@ function parseCsvText(text, sourceName) {
     } else {
       id     = (idCol >= 0 && parts[idCol]) ? parts[idCol] : `ORD-${String(nextSeq).padStart(3,'0')}`;
       width  = parseFloat(parts[widthCol]);
-      length = parseFloat(parts[lengthCol]);
+      length = parseLengthFt(parts[lengthCol]);
     }
 
     const v = validateOrder(width, length);
@@ -970,16 +982,23 @@ function optimizeBelts(rawOrders) {
     // Phase 1 — Best Fit Decreasing widthwise across all existing sections.
     // Find the section in any bin where this order fits with the least remaining slack.
     // Also ensure placing the order here won't extend the belt past MAX_BELT_LENGTH.
+    // Tie-break on equal slack: prefer a section where the order doesn't grow the belt length.
     let bestBin = null, bestSection = null, bestSlack = Infinity;
     for (const bin of bins) {
       for (const section of bin.sections) {
         const newTotal = section.totalReqWidth + order.reqWidth;
         const slack    = MAX_WIDTH - newTotal;
-        if (slack < 0 || slack >= bestSlack) continue;
+        if (slack < 0 || slack > bestSlack) continue;
         // If the order is longer than the current section max, the belt length grows.
         const newBinLength = binLength(bin) - section.maxReqLength
                            + Math.max(section.maxReqLength, order.reqLength);
         if (newBinLength > MAX_BELT_LENGTH) continue;
+        // On equal slack prefer the section that doesn't extend the belt length.
+        if (slack === bestSlack && bestSection !== null) {
+          const curGrows  = order.reqLength > section.maxReqLength;
+          const prevGrows = order.reqLength > bestSection.maxReqLength;
+          if (curGrows && !prevGrows) continue; // current candidate is worse
+        }
         bestBin     = bin;
         bestSection = section;
         bestSlack   = slack;
