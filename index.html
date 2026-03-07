@@ -934,6 +934,9 @@ const SEG_COLORS = [
 ];
 
 function optimizeBelts(rawOrders) {
+  const MAX_BELT_LENGTH = 600;          // maximum belt length (feet)
+  const LW_WASTE_LIMIT  = 0.20;         // don't stack lengthwise if it pushes waste above 20%
+
   // Compute required dimensions (order size + production margin)
   const processed = rawOrders.map(o => ({
     ...o,
@@ -950,63 +953,107 @@ function optimizeBelts(rawOrders) {
     b.reqWidth - a.reqWidth || b.reqLength - a.reqLength
   );
 
-  // Best Fit Decreasing (BFD) bin-packing on belt width.
-  // Strategy: process orders largest-first (already sorted), and for each order
-  // find the existing belt with the least remaining width that still fits it.
-  // This minimises small unusable gaps and reduces the total number of belts needed.
-  // Each bin represents one physical belt cut; it tracks:
-  //   totalReqWidth — sum of required widths of all orders placed on it
-  //   maxReqLength  — the longest order on the belt (determines cut length)
-  const bins = []; // { orders[], totalReqWidth, maxReqLength }
+  // Each bin contains sections stacked lengthwise.
+  // A section is a widthwise group of orders: { orders[], totalReqWidth, maxReqLength }
+  // The belt length = sum of section maxReqLengths; width = max section totalReqWidth (≥ 48").
+  const bins = []; // { sections[] }
+
+  // Helpers
+  const binLength    = bin => bin.sections.reduce((s, sec) => s + sec.maxReqLength, 0);
+  const binMaxWidth  = bin => bin.sections.reduce((m, sec) => Math.max(m, sec.totalReqWidth), 0);
+  const binUsedArea  = bin => bin.sections.reduce(
+    (s, sec) => s + sec.orders.reduce((ss, o) => ss + (o.reqWidth / 12) * o.reqLength, 0), 0);
 
   for (const order of sorted) {
-    // Find the existing bin where this order fits with the least remaining space
-    let bestBin = null;
-    let bestSlack = Infinity;
+    let placed = false;
 
+    // Phase 1 — Best Fit Decreasing widthwise across all existing sections.
+    // Find the section in any bin where this order fits with the least remaining slack.
+    let bestBin = null, bestSection = null, bestSlack = Infinity;
     for (const bin of bins) {
-      const newTotal = bin.totalReqWidth + order.reqWidth;
-      const slack = MAX_WIDTH - newTotal;
-      if (slack >= 0 && slack < bestSlack) {
-        bestBin   = bin;
-        bestSlack = slack;
+      for (const section of bin.sections) {
+        const newTotal = section.totalReqWidth + order.reqWidth;
+        const slack    = MAX_WIDTH - newTotal;
+        if (slack >= 0 && slack < bestSlack) {
+          bestBin     = bin;
+          bestSection = section;
+          bestSlack   = slack;
+        }
       }
     }
 
     if (bestBin) {
-      // Place order into the best-fitting existing bin
-      bestBin.orders.push(order);
-      bestBin.totalReqWidth += order.reqWidth;
-      bestBin.maxReqLength   = Math.max(bestBin.maxReqLength, order.reqLength);
-    } else {
-      // No existing bin can accommodate this order — open a new belt
-      bins.push({
-        orders:        [order],
-        totalReqWidth: order.reqWidth,
-        maxReqLength:  order.reqLength,
-      });
+      bestSection.orders.push(order);
+      bestSection.totalReqWidth += order.reqWidth;
+      bestSection.maxReqLength   = Math.max(bestSection.maxReqLength, order.reqLength);
+      placed = true;
+    }
+
+    if (!placed) {
+      // Phase 2 — Lengthwise stacking: open a new section in an existing bin.
+      // Only allowed when the combined belt length stays ≤ 600 ft and the resulting
+      // waste percentage doesn't exceed the threshold.
+      let bestLenBin = null, bestLenWaste = Infinity;
+      for (const bin of bins) {
+        const newLength = binLength(bin) + order.reqLength;
+        if (newLength > MAX_BELT_LENGTH) continue;
+
+        const newMaxW  = Math.max(binMaxWidth(bin), order.reqWidth);
+        const beltW    = Math.max(MIN_WIDTH, newMaxW);
+        const totalA   = (beltW / 12) * newLength;
+        const usedA    = binUsedArea(bin) + (order.reqWidth / 12) * order.reqLength;
+        const wastePct = totalA > 0 ? (totalA - usedA) / totalA : 0;
+
+        if (wastePct <= LW_WASTE_LIMIT && wastePct < bestLenWaste) {
+          bestLenBin  = bin;
+          bestLenWaste = wastePct;
+        }
+      }
+
+      if (bestLenBin) {
+        bestLenBin.sections.push({
+          orders:        [order],
+          totalReqWidth: order.reqWidth,
+          maxReqLength:  order.reqLength,
+        });
+        placed = true;
+      }
+    }
+
+    if (!placed) {
+      // Phase 3 — Open a new bin (new belt).
+      bins.push({ sections: [{ orders: [order], totalReqWidth: order.reqWidth, maxReqLength: order.reqLength }] });
     }
   }
 
-  // Build belt results
+  // Build belt result objects
   const belts = bins.map((bin, i) => {
-    // Belt width: smallest feasible value (min 48", max 108")
-    const beltWidth  = Math.max(MIN_WIDTH, bin.totalReqWidth);
-    const beltLength = bin.maxReqLength; // already at 0.5' precision
+    // Assign xStart (length offset) to each section
+    let xCursor = 0;
+    const sections = bin.sections.map(sec => {
+      const s = { ...sec, xStart: xCursor };
+      xCursor += sec.maxReqLength;
+      return s;
+    });
 
-    // Areas in sq ft
-    const totalArea  = (beltWidth / 12) * beltLength;
-    const usedArea   = bin.orders.reduce((sum, o) => sum + (o.reqWidth / 12) * o.reqLength, 0);
-    const wasteArea  = totalArea - usedArea;
-    const wastePct   = totalArea > 0 ? (wasteArea / totalArea * 100) : 0;
+    const beltLength     = xCursor;
+    const maxSectionWidth = sections.reduce((m, s) => Math.max(m, s.totalReqWidth), 0);
+    const beltWidth      = Math.max(MIN_WIDTH, maxSectionWidth);
+    const allOrders      = sections.flatMap(s => s.orders);
+
+    const totalArea = (beltWidth / 12) * beltLength;
+    const usedArea  = allOrders.reduce((sum, o) => sum + (o.reqWidth / 12) * o.reqLength, 0);
+    const wasteArea = totalArea - usedArea;
+    const wastePct  = totalArea > 0 ? (wasteArea / totalArea * 100) : 0;
 
     return {
       id:            `Belt-${i + 1}`,
       beltWidth,
       beltLength,
-      orders:        bin.orders,
-      totalReqWidth: bin.totalReqWidth,
-      unusedWidth:   beltWidth - bin.totalReqWidth,
+      sections,
+      orders:        allOrders,
+      totalReqWidth: maxSectionWidth,           // widest section (used for min-width note)
+      unusedWidth:   beltWidth - maxSectionWidth,
       totalArea,
       usedArea,
       wasteArea,
@@ -1094,40 +1141,57 @@ function buildSlabCanvas(belt, colorAssign) {
     gridLines += `<div class="slab-grid-line" style="left:${pct}%"></div>`;
   }
 
-  // Order blocks and length-waste blocks
+  // Order blocks and waste blocks — rendered per section along the length axis.
+  // Each section occupies its own x-range; orders within a section stack along y (width).
   let cells = '';
-  let yPct = 0;
-  let cumW = 0;
-  // Start tick at the top edge (0")
   let yTicks = `<div class="slab-y-tick" style="top:0%">0"</div>`;
 
-  belt.orders.forEach(o => {
-    const [bg, fg] = colorAssign[o.seq];
-    const hPct = (o.reqWidth  / belt.beltWidth  * 100);
-    const wPct = (o.reqLength / belt.beltLength * 100);
+  // Y-ticks are derived from the widest section (first section after BFD sort)
+  const primarySection = belt.sections.reduce((a, b) => a.totalReqWidth >= b.totalReqWidth ? a : b);
+  let primaryYPct = 0, primaryCumW = 0;
 
-    cells += `<div class="slab-order" style="left:0;top:${yPct.toFixed(4)}%;width:${wPct.toFixed(4)}%;height:${hPct.toFixed(4)}%;background:${bg};color:${fg};"
-        title="${esc(o.id)}: ${fmt2(o.reqWidth)}&quot; wide × ${fmt2(o.reqLength)}' long&#10;(${(o.reqWidth/belt.beltWidth*100).toFixed(1)}% of belt width, ${(o.reqLength/belt.beltLength*100).toFixed(1)}% of belt length)"
-      ><span class="slab-order-label">${esc(o.id)}</span></div>`;
+  belt.sections.forEach(section => {
+    const xStartPct = (section.xStart / len * 100);
+    const secLenPct = (section.maxReqLength / len * 100);
+    let sectionYPct = 0;
 
-    // Length-waste lane (unused length in this width strip)
-    if (o.reqLength < belt.beltLength) {
-      cells += `<div class="slab-len-waste" style="left:${wPct.toFixed(4)}%;top:${yPct.toFixed(4)}%;width:${(100-wPct).toFixed(4)}%;height:${hPct.toFixed(4)}%;"
-          title="${esc(o.id)} length waste: ${fmt2(belt.beltLength - o.reqLength)}' unused in this lane"></div>`;
+    section.orders.forEach(o => {
+      const [bg, fg] = colorAssign[o.seq];
+      const hPct = (o.reqWidth  / belt.beltWidth * 100);
+      const wPct = (o.reqLength / len * 100);
+
+      cells += `<div class="slab-order" style="left:${xStartPct.toFixed(4)}%;top:${sectionYPct.toFixed(4)}%;width:${wPct.toFixed(4)}%;height:${hPct.toFixed(4)}%;background:${bg};color:${fg};"
+          title="${esc(o.id)}: ${fmt2(o.reqWidth)}&quot; wide × ${fmt2(o.reqLength)}' long&#10;(${(o.reqWidth/belt.beltWidth*100).toFixed(1)}% of belt width, ${(o.reqLength/section.maxReqLength*100).toFixed(1)}% of section length)"
+        ><span class="slab-order-label">${esc(o.id)}</span></div>`;
+
+      // Length-waste lane within this section (order shorter than section)
+      if (o.reqLength < section.maxReqLength) {
+        const lwStartPct  = ((section.xStart + o.reqLength) / len * 100);
+        const lwWidthPct  = ((section.maxReqLength - o.reqLength) / len * 100);
+        cells += `<div class="slab-len-waste" style="left:${lwStartPct.toFixed(4)}%;top:${sectionYPct.toFixed(4)}%;width:${lwWidthPct.toFixed(4)}%;height:${hPct.toFixed(4)}%;"
+            title="${esc(o.id)} length waste: ${fmt2(section.maxReqLength - o.reqLength)}' unused in this lane"></div>`;
+      }
+
+      sectionYPct += hPct;
+    });
+
+    // Width-waste block for this section (section narrower than belt)
+    const secUnused = belt.beltWidth - section.totalReqWidth;
+    if (secUnused > 0) {
+      const wwH = (secUnused / belt.beltWidth * 100).toFixed(4);
+      cells += `<div class="slab-wid-waste" style="left:${xStartPct.toFixed(4)}%;top:${sectionYPct.toFixed(4)}%;width:${secLenPct.toFixed(4)}%;height:${wwH}%;"
+          title="Width waste in this section: ${fmt2(secUnused)}&quot; unused across ${fmt2(section.maxReqLength)}'"></div>`;
     }
 
-    yPct += hPct;
-    cumW += o.reqWidth;
-    // Y-axis tick at the bottom boundary of this order
-    yTicks += `<div class="slab-y-tick" style="top:${yPct.toFixed(4)}%">${fmt2(cumW)}"</div>`;
+    // Build y-ticks from the primary (widest) section
+    if (section === primarySection) {
+      section.orders.forEach(o => {
+        primaryYPct += (o.reqWidth / belt.beltWidth * 100);
+        primaryCumW += o.reqWidth;
+        yTicks += `<div class="slab-y-tick" style="top:${primaryYPct.toFixed(4)}%">${fmt2(primaryCumW)}"</div>`;
+      });
+    }
   });
-
-  // Width-waste block
-  if (belt.unusedWidth > 0) {
-    const wwH = (belt.unusedWidth / belt.beltWidth * 100).toFixed(4);
-    cells += `<div class="slab-wid-waste" style="left:0;top:${yPct.toFixed(4)}%;width:100%;height:${wwH}%;"
-        title="Width waste: ${fmt2(belt.unusedWidth)}&quot; unused across full ${fmt2(belt.beltLength)}' = ${fmt(belt.wasteArea)} sq ft"></div>`;
-  }
 
   // X-axis labels
   let xTicks = `<span class="slab-x-tick-first">0'</span>`;
@@ -1172,19 +1236,26 @@ function renderBelts(belts) {
     let ci = 0;
     belt.orders.forEach(o => { colorAssign[o.seq] = SEG_COLORS[ci++ % SEG_COLORS.length]; });
 
-    // Orders table rows
-    const rows = belt.orders.map(o => {
-      const [bg] = colorAssign[o.seq];
-      const isLongest = o.reqLength === belt.beltLength;
-      return `<tr>
-        <td><span class="tag" style="background:${bg}20;color:${bg}">${esc(o.id)}</span></td>
-        <td class="mono">${o.width}"</td>
-        <td class="mono">${o.length}'</td>
-        <td class="mono">${o.reqWidth}"</td>
-        <td class="mono">${o.reqLength}'</td>
-        <td class="mono">${(o.reqWidth / belt.beltWidth * 100).toFixed(1)}%</td>
-        ${isLongest ? '<td><span class="tag tag-accent">sets length</span></td>' : '<td></td>'}
-      </tr>`;
+    // Orders table rows — grouped by section
+    const multiSection = belt.sections.length > 1;
+    const rows = belt.sections.flatMap((section, si) => {
+      const secHeader = multiSection
+        ? `<tr><td colspan="7" style="padding:4px 8px;font-size:0.75rem;color:var(--text-muted);background:var(--surface-alt,var(--surface))">Section ${si + 1} — ${fmt2(section.xStart)}′ to ${fmt2(section.xStart + section.maxReqLength)}′ (${fmt2(section.maxReqLength)}′ long, ${fmt2(section.totalReqWidth)}" wide)</td></tr>`
+        : '';
+      const orderRows = section.orders.map(o => {
+        const [bg] = colorAssign[o.seq];
+        const setsLen = o.reqLength === section.maxReqLength;
+        return `<tr>
+          <td><span class="tag" style="background:${bg}20;color:${bg}">${esc(o.id)}</span></td>
+          <td class="mono">${o.width}"</td>
+          <td class="mono">${o.length}'</td>
+          <td class="mono">${o.reqWidth}"</td>
+          <td class="mono">${o.reqLength}'</td>
+          <td class="mono">${(o.reqWidth / belt.beltWidth * 100).toFixed(1)}%</td>
+          ${setsLen ? '<td><span class="tag tag-accent">sets length</span></td>' : '<td></td>'}
+        </tr>`;
+      }).join('');
+      return secHeader + orderRows;
     }).join('');
 
     const wasteTag = belt.wastePct < 5
@@ -1221,8 +1292,8 @@ function renderBelts(belts) {
               &nbsp;= <strong style="color:var(--text)">${fmt(belt.totalArea)} sq ft</strong>
             </div>
             <div style="font-size:0.78rem;color:var(--text-muted)">
-              Waste: <strong style="color:var(--red)">${fmt2(belt.unusedWidth)}" × ${fmt2(belt.beltLength)}' = ${fmt(belt.wasteArea)} sq ft</strong>
-              (${belt.wastePct.toFixed(1)}%)
+              Waste: <strong style="color:var(--red)">${fmt(belt.wasteArea)} sq ft</strong>
+              (${belt.wastePct.toFixed(1)}%)${belt.sections.length > 1 ? ` &nbsp;·&nbsp; <span style="color:var(--text-muted)">${belt.sections.length} sections stacked lengthwise</span>` : ''}
             </div>
           </div>
         </div>
@@ -1252,16 +1323,19 @@ function renderNotes(belts, infeasible) {
 
   // Wide-waste belts
   belts.filter(b => b.wastePct > 25).forEach(b => {
-    notes.push({ cls: 'note-warn', text: `${b.id} has ${b.wastePct.toFixed(1)}% waste (${fmt2(b.unusedWidth)}" unused). Consider pairing it with a future order ~${fmt2(b.unusedWidth - 0.5)}" wide or narrower.` });
+    const hint = b.sections.length === 1 && b.unusedWidth > 0
+      ? ` Consider pairing it with a future order ~${fmt2(b.unusedWidth - 0.5)}" wide or narrower.`
+      : '';
+    notes.push({ cls: 'note-warn', text: `${b.id} has ${b.wastePct.toFixed(1)}% waste (${fmt(b.wasteArea)} sq ft).${hint}` });
   });
 
-  // Min-width-constrained belts
+  // Min-width-constrained belts (check widest section)
   belts.filter(b => b.totalReqWidth < MIN_WIDTH && b.unusedWidth > 0).forEach(b => {
     notes.push({ cls: 'note-info', text: `${b.id} is constrained to the 48″ minimum belt width. Order widths only sum to ${fmt2(b.totalReqWidth)}" — consider adding orders to this belt to reduce waste.` });
   });
 
   if (belts.length > 0 && infeasible.length === 0) {
-    notes.push({ cls: 'note-info', text: `The optimizer used a Best Fit Decreasing algorithm on belt width to minimize the number of production runs. All orders have a 0.5″ width margin and 0.5′ length margin applied.` });
+    notes.push({ cls: 'note-info', text: `The optimizer used a Best Fit Decreasing algorithm on belt width to minimize the number of production runs. Orders are also stacked lengthwise (up to 600′) when it keeps waste below 20%. All orders have a 0.5″ width margin and 0.5′ length margin applied.` });
   }
 
   const ul = document.getElementById('notesList');
