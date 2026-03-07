@@ -14,7 +14,7 @@ Given a list of customer belt orders (each with a width and length), the tool au
 - **Visual belt layout** — Color-coded bar showing how each order occupies the belt width
 - **Waste analysis** — Per-belt and overall waste in square feet and percentage
 - **Infeasible order detection** — Orders exceeding the 108″ max width are flagged separately
-- **Smart notes** — Contextual recommendations (e.g., high-waste belts, min-width constraints, lengthwise-only orders)
+- **Smart notes** — Contextual recommendations (e.g., high-waste belts, min-width constraints)
 
 ## Constraints & Business Rules
 
@@ -26,7 +26,6 @@ Given a list of customer belt orders (each with a width and length), the tool au
 | Length margin added per order | +0.5 feet |
 | Order width range | 6 – 108 inches |
 | Order length range | 1 – 600 feet |
-| Lengthwise flag threshold | < 100 ft (must be produced lengthwise) |
 
 ## How the Optimizer Works
 

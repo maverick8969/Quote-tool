@@ -623,7 +623,6 @@ const CONFIG = {
   MAX_ORDER_LENGTH:       600,           // maximum customer order length (feet)
   WIDTH_MARGIN:           0.5,           // production margin added to order width (inches)
   LENGTH_MARGIN:          0.5,           // production margin added to order length (feet)
-  SHORT_LENGTH_THRESHOLD: 100,           // orders below this length must be produced lengthwise
   MAX_ORDERS:             500,           // practical limit on number of simultaneous orders
   MAX_FILE_SIZE:          5 * 1024 * 1024, // 5 MB max upload size
 };
@@ -899,12 +898,11 @@ function renderOrders() {
   tbody.innerHTML = orders.map(o => {
     const rw = o.width + CONFIG.WIDTH_MARGIN;
     const rl = o.length + CONFIG.LENGTH_MARGIN;
-    const warnLen = o.length < CONFIG.SHORT_LENGTH_THRESHOLD;
     return `<tr>
       <td class="muted mono">${o.seq}</td>
       <td><strong>${esc(o.id)}</strong></td>
       <td class="mono">${o.width}"</td>
-      <td class="mono">${o.length}'${warnLen ? ' <span class="tag tag-yellow" title="Length &lt; 100ft: must be produced lengthwise">⚠</span>' : ''}</td>
+      <td class="mono">${o.length}'</td>
       <td class="mono">${rw}"</td>
       <td class="mono">${rl}'</td>
       <td><button class="btn btn-danger-sm" onclick="removeOrder(${o.seq})">Remove</button></td>
@@ -941,7 +939,6 @@ function optimizeBelts(rawOrders) {
     ...o,
     reqWidth:  o.width  + CONFIG.WIDTH_MARGIN,
     reqLength: o.length + CONFIG.LENGTH_MARGIN,
-    flagLengthwise: o.length < CONFIG.SHORT_LENGTH_THRESHOLD,
   }));
 
   // Split infeasible (required width > MAX_WIDTH)
@@ -1187,7 +1184,6 @@ function renderBelts(belts) {
         <td class="mono">${o.reqLength}'</td>
         <td class="mono">${(o.reqWidth / belt.beltWidth * 100).toFixed(1)}%</td>
         ${isLongest ? '<td><span class="tag tag-accent">sets length</span></td>' : '<td></td>'}
-        ${o.flagLengthwise ? '<td><span class="tag tag-yellow" title="Must be produced lengthwise">lengthwise</span></td>' : '<td></td>'}
       </tr>`;
     }).join('');
 
@@ -1263,12 +1259,6 @@ function renderNotes(belts, infeasible) {
   belts.filter(b => b.totalReqWidth < MIN_WIDTH && b.unusedWidth > 0).forEach(b => {
     notes.push({ cls: 'note-info', text: `${b.id} is constrained to the 48″ minimum belt width. Order widths only sum to ${fmt2(b.totalReqWidth)}" — consider adding orders to this belt to reduce waste.` });
   });
-
-  // Lengthwise-only orders
-  const lw = belts.flatMap(b => b.orders).filter(o => o.flagLengthwise);
-  if (lw.length) {
-    notes.push({ cls: 'note-warn', text: `${lw.length} order(s) have a length < 100 ft and must be produced lengthwise (cannot be placed across the belt width): ${lw.map(o=>o.id).join(', ')}.` });
-  }
 
   if (belts.length > 0 && infeasible.length === 0) {
     notes.push({ cls: 'note-info', text: `The optimizer used a Best Fit Decreasing algorithm on belt width to minimize the number of production runs. All orders have a 0.5″ width margin and 0.5′ length margin applied.` });
