@@ -519,6 +519,23 @@
 
 <script>
 // ──────────────────────────────────────────────
+// Configuration
+// ──────────────────────────────────────────────
+const CONFIG = {
+  MAX_BELT_WIDTH:         108,           // maximum manufacturable belt width (inches)
+  MIN_BELT_WIDTH:         48,            // minimum manufacturable belt width (inches)
+  MIN_ORDER_WIDTH:        6,             // minimum customer order width (inches)
+  MAX_ORDER_WIDTH:        108,           // maximum customer order width (inches)
+  MIN_ORDER_LENGTH:       1,             // minimum customer order length (feet)
+  MAX_ORDER_LENGTH:       600,           // maximum customer order length (feet)
+  WIDTH_MARGIN:           0.5,           // production margin added to order width (inches)
+  LENGTH_MARGIN:          0.5,           // production margin added to order length (feet)
+  SHORT_LENGTH_THRESHOLD: 100,           // orders below this length must be produced lengthwise
+  MAX_ORDERS:             500,           // practical limit on number of simultaneous orders
+  MAX_FILE_SIZE:          1 * 1024 * 1024, // 1 MB max CSV upload size
+};
+
+// ──────────────────────────────────────────────
 // State
 // ──────────────────────────────────────────────
 let orders = [];
@@ -535,16 +552,17 @@ function addOrder() {
   const width  = parseFloat(widthEl.value);
   const length = parseFloat(lenEl.value);
 
-  let valid = true;
   clearFieldErrors();
 
-  if (isNaN(width) || width < 6 || width > 108) {
-    showErr('errWidth'); widthEl.classList.add('error'); valid = false;
+  const v = validateOrder(width, length);
+  if (!v.widthOk)  { showErr('errWidth');  widthEl.classList.add('error'); }
+  if (!v.lengthOk) { showErr('errLength'); lenEl.classList.add('error'); }
+  if (!v.widthOk || !v.lengthOk) return;
+
+  if (orders.length >= CONFIG.MAX_ORDERS) {
+    alert(`Maximum of ${CONFIG.MAX_ORDERS} orders reached. Please optimize the current orders first.`);
+    return;
   }
-  if (isNaN(length) || length < 1 || length > 600) {
-    showErr('errLength'); lenEl.classList.add('error'); valid = false;
-  }
-  if (!valid) return;
 
   const orderId = idEl.value.trim() || `ORD-${String(nextSeq).padStart(3,'0')}`;
   orders.push({ seq: nextSeq++, id: orderId, width, length });
@@ -560,10 +578,19 @@ function addOrder() {
 function handleCsvFile(input) {
   const file = input.files[0];
   if (!file) return;
+  if (file.size > CONFIG.MAX_FILE_SIZE) {
+    alert(`File is too large (${(file.size / 1024).toFixed(0)} KB). Maximum size is 1 MB.`);
+    input.value = '';
+    return;
+  }
   const reader = new FileReader();
   reader.onload = e => {
     parseCsvText(e.target.result, file.name);
     input.value = ''; // reset so same file can be re-imported
+  };
+  reader.onerror = () => {
+    alert('Error reading file. Please check the file and try again.');
+    input.value = '';
   };
   reader.readAsText(file);
 }
@@ -572,17 +599,18 @@ function parseCsvText(text, sourceName) {
   const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
   if (!lines.length) return;
 
-  // Detect and skip header row: if first row contains non-numeric second/third columns
-  let startIdx = 0;
+  // Detect header row: if any cell in the first row matches a known header keyword
+  const HEADER_RE = /^(id|order|order[-_ ]?id|width|w|length|len|l)$/i;
   const firstParts = lines[0].split(',').map(s => s.trim());
-  const secondColNum = parseFloat(firstParts[firstParts.length >= 3 ? 1 : 0]);
-  if (isNaN(secondColNum) || (firstParts.length >= 3 && isNaN(parseFloat(firstParts[2])))) {
-    startIdx = 1; // skip header
-  }
+  const startIdx = firstParts.some(p => HEADER_RE.test(p)) ? 1 : 0;
 
   const errors = [];
   let added = 0;
   for (let i = startIdx; i < lines.length; i++) {
+    if (orders.length >= CONFIG.MAX_ORDERS) {
+      errors.push(`Order limit of ${CONFIG.MAX_ORDERS} reached — ${lines.length - i} row(s) skipped.`);
+      break;
+    }
     const parts = lines[i].split(',').map(s => s.trim());
     let id, width, length;
     if (parts.length >= 3) {
@@ -597,8 +625,9 @@ function parseCsvText(text, sourceName) {
       errors.push(`Row ${i+1}: expected 2 or 3 columns`);
       continue;
     }
-    if (isNaN(width) || width < 6 || width > 108) { errors.push(`Row ${i+1}: invalid width "${parts[parts.length-2]}"`); continue; }
-    if (isNaN(length) || length < 1 || length > 600) { errors.push(`Row ${i+1}: invalid length "${parts[parts.length-1]}"`); continue; }
+    const v = validateOrder(width, length);
+    if (!v.widthOk)  { errors.push(`Row ${i+1}: invalid width "${parts[parts.length-2]}"`); continue; }
+    if (!v.lengthOk) { errors.push(`Row ${i+1}: invalid length "${parts[parts.length-1]}"`); continue; }
     orders.push({ seq: nextSeq++, id, width, length });
     added++;
   }
@@ -636,8 +665,13 @@ document.addEventListener('DOMContentLoaded', () => {
     zone.style.background  = '';
     const file = e.dataTransfer.files[0];
     if (!file) return;
+    if (file.size > CONFIG.MAX_FILE_SIZE) {
+      alert(`File is too large (${(file.size / 1024).toFixed(0)} KB). Maximum size is 1 MB.`);
+      return;
+    }
     const reader = new FileReader();
     reader.onload = ev => parseCsvText(ev.target.result, file.name);
+    reader.onerror = () => alert('Error reading file. Please check the file and try again.');
     reader.readAsText(file);
   });
 });
@@ -647,20 +681,25 @@ function bulkAdd() {
   if (!text) return;
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
   const errors = [];
-  lines.forEach((line, i) => {
-    const parts = line.split(',').map(s => s.trim());
+  for (let i = 0; i < lines.length; i++) {
+    if (orders.length >= CONFIG.MAX_ORDERS) {
+      errors.push(`Order limit of ${CONFIG.MAX_ORDERS} reached — ${lines.length - i} row(s) skipped.`);
+      break;
+    }
+    const parts = lines[i].split(',').map(s => s.trim());
     let id, width, length;
     if (parts.length === 3) {
       id = parts[0]; width = parseFloat(parts[1]); length = parseFloat(parts[2]);
     } else if (parts.length === 2) {
       id = `ORD-${String(nextSeq).padStart(3,'0')}`;
       width = parseFloat(parts[0]); length = parseFloat(parts[1]);
-    } else { errors.push(`Line ${i+1}: expected 2 or 3 columns`); return; }
+    } else { errors.push(`Line ${i+1}: expected 2 or 3 columns`); continue; }
 
-    if (isNaN(width) || width < 6 || width > 108) { errors.push(`Line ${i+1}: invalid width "${parts[parts.length-2]}"`); return; }
-    if (isNaN(length) || length < 1 || length > 600) { errors.push(`Line ${i+1}: invalid length "${parts[parts.length-1]}"`); return; }
+    const v = validateOrder(width, length);
+    if (!v.widthOk)  { errors.push(`Line ${i+1}: invalid width "${parts[parts.length-2]}"`); continue; }
+    if (!v.lengthOk) { errors.push(`Line ${i+1}: invalid length "${parts[parts.length-1]}"`); continue; }
     orders.push({ seq: nextSeq++, id, width, length });
-  });
+  }
   document.getElementById('fBulk').value = '';
   renderOrders();
   if (errors.length) alert('Some rows skipped:\n' + errors.join('\n'));
@@ -698,9 +737,9 @@ function renderOrders() {
   wrap.style.display  = 'block';
 
   tbody.innerHTML = orders.map(o => {
-    const rw = o.width + 0.5;
-    const rl = o.length + 0.5;
-    const warnLen = o.length < 100;
+    const rw = o.width + CONFIG.WIDTH_MARGIN;
+    const rl = o.length + CONFIG.LENGTH_MARGIN;
+    const warnLen = o.length < CONFIG.SHORT_LENGTH_THRESHOLD;
     return `<tr>
       <td class="muted mono">${o.seq}</td>
       <td><strong>${esc(o.id)}</strong></td>
@@ -727,8 +766,8 @@ document.addEventListener('keydown', e => {
 // ──────────────────────────────────────────────
 // Optimization Engine
 // ──────────────────────────────────────────────
-const MAX_WIDTH = 108;
-const MIN_WIDTH = 48;
+const MAX_WIDTH = CONFIG.MAX_BELT_WIDTH;
+const MIN_WIDTH = CONFIG.MIN_BELT_WIDTH;
 const SEG_COLORS = [
   ['#4f7cff','#0a1540'],['#2ecc71','#071a0e'],['#e67e22','#1a0b00'],
   ['#9b59b6','#130a1a'],['#1abc9c','#051510'],['#e91e63','#1a0510'],
@@ -737,12 +776,12 @@ const SEG_COLORS = [
 ];
 
 function optimizeBelts(rawOrders) {
-  // Compute required dimensions
+  // Compute required dimensions (order size + production margin)
   const processed = rawOrders.map(o => ({
     ...o,
-    reqWidth:  o.width  + 0.5,
-    reqLength: o.length + 0.5,
-    flagLengthwise: o.length < 100,
+    reqWidth:  o.width  + CONFIG.WIDTH_MARGIN,
+    reqLength: o.length + CONFIG.LENGTH_MARGIN,
+    flagLengthwise: o.length < CONFIG.SHORT_LENGTH_THRESHOLD,
   }));
 
   // Split infeasible (required width > MAX_WIDTH)
@@ -754,11 +793,17 @@ function optimizeBelts(rawOrders) {
     b.reqWidth - a.reqWidth || b.reqLength - a.reqLength
   );
 
-  // Bin-pack using Best Fit Decreasing on width
-  // Each bin tracks total required width and max required length
+  // Best Fit Decreasing (BFD) bin-packing on belt width.
+  // Strategy: process orders largest-first (already sorted), and for each order
+  // find the existing belt with the least remaining width that still fits it.
+  // This minimises small unusable gaps and reduces the total number of belts needed.
+  // Each bin represents one physical belt cut; it tracks:
+  //   totalReqWidth — sum of required widths of all orders placed on it
+  //   maxReqLength  — the longest order on the belt (determines cut length)
   const bins = []; // { orders[], totalReqWidth, maxReqLength }
 
   for (const order of sorted) {
+    // Find the existing bin where this order fits with the least remaining space
     let bestBin = null;
     let bestSlack = Infinity;
 
@@ -772,10 +817,12 @@ function optimizeBelts(rawOrders) {
     }
 
     if (bestBin) {
+      // Place order into the best-fitting existing bin
       bestBin.orders.push(order);
       bestBin.totalReqWidth += order.reqWidth;
       bestBin.maxReqLength   = Math.max(bestBin.maxReqLength, order.reqLength);
     } else {
+      // No existing bin can accommodate this order — open a new belt
       bins.push({
         orders:        [order],
         totalReqWidth: order.reqWidth,
@@ -907,7 +954,7 @@ function renderBelts(belts) {
         <td class="mono">${o.length}'</td>
         <td class="mono">${o.reqWidth}"</td>
         <td class="mono">${o.reqLength}'</td>
-        <td class="mono" style="color:${fmt2((o.reqWidth / belt.beltWidth * 100))}%">${(o.reqWidth / belt.beltWidth * 100).toFixed(1)}%</td>
+        <td class="mono">${(o.reqWidth / belt.beltWidth * 100).toFixed(1)}%</td>
         ${isLongest ? '<td><span class="tag tag-accent">sets length</span></td>' : '<td></td>'}
         ${o.flagLengthwise ? '<td><span class="tag tag-yellow" title="Must be produced lengthwise">lengthwise</span></td>' : '<td></td>'}
       </tr>`;
@@ -1009,6 +1056,12 @@ function fmt(n)  { return n.toFixed(1); }
 function fmt2(n) { return Number.isInteger(n) ? String(n) : n.toFixed(1); }
 function esc(s)  {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function validateOrder(width, length) {
+  return {
+    widthOk:  !isNaN(width)  && width  >= CONFIG.MIN_ORDER_WIDTH  && width  <= CONFIG.MAX_ORDER_WIDTH,
+    lengthOk: !isNaN(length) && length >= CONFIG.MIN_ORDER_LENGTH && length <= CONFIG.MAX_ORDER_LENGTH,
+  };
 }
 </script>
 </body>
