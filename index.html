@@ -4,6 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Belt Order Layout Optimizer</title>
+  <!-- SheetJS for XLS/XLSX parsing -->
+  <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -526,18 +528,18 @@
 
     <div class="card-title">Bulk Import</div>
 
-    <!-- CSV File Upload -->
+    <!-- File Upload (CSV / Excel) -->
     <div class="form-group">
-      <label>Upload CSV File <span class="muted">(ID,Width,Length)</span></label>
+      <label>Upload CSV or Excel <span class="muted">(ID, Width, Length)</span></label>
       <label id="csvDropZone" for="csvFileInput" style="
         display:flex;align-items:center;justify-content:center;gap:8px;
         border:1px dashed var(--border);border-radius:7px;padding:14px;
         cursor:pointer;transition:border-color 0.15s,background 0.15s;
         font-size:0.82rem;color:var(--text-muted);">
-        &#128196; Choose CSV or drag &amp; drop
+        &#128196; Choose CSV / XLS / XLSX or drag &amp; drop
       </label>
-      <input type="file" id="csvFileInput" accept=".csv,text/csv" style="display:none" onchange="handleCsvFile(this)"/>
-      <div class="hint">Format: one order per row — <code style="font-size:0.75rem;background:var(--surface2);padding:1px 5px;border-radius:3px">ID,Width,Length</code> (header row auto-detected)</div>
+      <input type="file" id="csvFileInput" accept=".csv,.xls,.xlsx,text/csv" style="display:none" onchange="handleFileInput(this)"/>
+      <div class="hint">Columns: <code style="font-size:0.75rem;background:var(--surface2);padding:1px 5px;border-radius:3px">ID, Width, Length</code> — CSV or first sheet of Excel; header row auto-detected</div>
     </div>
 
     <!-- Paste fallback -->
@@ -623,7 +625,7 @@ const CONFIG = {
   LENGTH_MARGIN:          0.5,           // production margin added to order length (feet)
   SHORT_LENGTH_THRESHOLD: 100,           // orders below this length must be produced lengthwise
   MAX_ORDERS:             500,           // practical limit on number of simultaneous orders
-  MAX_FILE_SIZE:          1 * 1024 * 1024, // 1 MB max CSV upload size
+  MAX_FILE_SIZE:          5 * 1024 * 1024, // 5 MB max upload size
 };
 
 // ──────────────────────────────────────────────
@@ -664,26 +666,46 @@ function addOrder() {
 }
 
 // ──────────────────────────────────────────────
-// CSV File Import
+// File Import  (CSV, XLS, XLSX)
 // ──────────────────────────────────────────────
-function handleCsvFile(input) {
+const EXCEL_EXTS = new Set(['xls', 'xlsx', 'xlsm', 'xlsb']);
+
+function fileExt(name) { return name.split('.').pop().toLowerCase(); }
+
+function handleFileInput(input) {
   const file = input.files[0];
+  if (file) handleFile(file);
+  input.value = ''; // reset so same file can be re-imported
+}
+
+function handleFile(file) {
   if (!file) return;
   if (file.size > CONFIG.MAX_FILE_SIZE) {
-    alert(`File is too large (${(file.size / 1024).toFixed(0)} KB). Maximum size is 1 MB.`);
-    input.value = '';
+    alert(`File is too large (${(file.size / 1024).toFixed(0)} KB). Maximum size is ${CONFIG.MAX_FILE_SIZE / 1024 / 1024} MB.`);
     return;
   }
+  const ext = fileExt(file.name);
   const reader = new FileReader();
-  reader.onload = e => {
-    parseCsvText(e.target.result, file.name);
-    input.value = ''; // reset so same file can be re-imported
-  };
-  reader.onerror = () => {
-    alert('Error reading file. Please check the file and try again.');
-    input.value = '';
-  };
-  reader.readAsText(file);
+  if (EXCEL_EXTS.has(ext)) {
+    reader.onload  = e => parseExcelBuffer(e.target.result, file.name);
+    reader.onerror = () => alert('Error reading file. Please check the file and try again.');
+    reader.readAsArrayBuffer(file);
+  } else {
+    reader.onload  = e => parseCsvText(e.target.result, file.name);
+    reader.onerror = () => alert('Error reading file. Please check the file and try again.');
+    reader.readAsText(file);
+  }
+}
+
+function parseExcelBuffer(arrayBuffer, sourceName) {
+  try {
+    const wb  = XLSX.read(arrayBuffer, { type: 'array' });
+    const ws  = wb.Sheets[wb.SheetNames[0]]; // always use first sheet
+    const csv = XLSX.utils.sheet_to_csv(ws, { blankrows: false });
+    parseCsvText(csv, sourceName);
+  } catch (err) {
+    alert('Could not parse Excel file: ' + err.message);
+  }
 }
 
 function parseCsvText(text, sourceName) {
@@ -730,7 +752,7 @@ function parseCsvText(text, sourceName) {
     label.style.color = 'var(--green)';
     label.style.borderColor = 'var(--green)';
     setTimeout(() => {
-      label.innerHTML = '&#128196; Choose CSV or drag &amp; drop';
+      label.innerHTML = '&#128196; Choose CSV / XLS / XLSX or drag &amp; drop';
       label.style.color = '';
       label.style.borderColor = '';
     }, 3000);
@@ -738,7 +760,7 @@ function parseCsvText(text, sourceName) {
   if (errors.length) alert('Some rows skipped:\n' + errors.join('\n'));
 }
 
-// Drag-and-drop on the CSV drop zone
+// Drag-and-drop on the file drop zone
 document.addEventListener('DOMContentLoaded', () => {
   const zone = document.getElementById('csvDropZone');
   zone.addEventListener('dragover', e => {
@@ -754,16 +776,7 @@ document.addEventListener('DOMContentLoaded', () => {
     e.preventDefault();
     zone.style.borderColor = '';
     zone.style.background  = '';
-    const file = e.dataTransfer.files[0];
-    if (!file) return;
-    if (file.size > CONFIG.MAX_FILE_SIZE) {
-      alert(`File is too large (${(file.size / 1024).toFixed(0)} KB). Maximum size is 1 MB.`);
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = ev => parseCsvText(ev.target.result, file.name);
-    reader.onerror = () => alert('Error reading file. Please check the file and try again.');
-    reader.readAsText(file);
+    handleFile(e.dataTransfer.files[0]);
   });
 });
 
