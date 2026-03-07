@@ -4,6 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Belt Order Layout Optimizer</title>
+  <!-- SheetJS for XLS/XLSX parsing -->
+  <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -526,18 +528,18 @@
 
     <div class="card-title">Bulk Import</div>
 
-    <!-- CSV File Upload -->
+    <!-- File Upload (CSV / Excel) -->
     <div class="form-group">
-      <label>Upload CSV File <span class="muted">(ID,Width,Length)</span></label>
+      <label>Upload CSV or Excel <span class="muted">(ID, Width, Length)</span></label>
       <label id="csvDropZone" for="csvFileInput" style="
         display:flex;align-items:center;justify-content:center;gap:8px;
         border:1px dashed var(--border);border-radius:7px;padding:14px;
         cursor:pointer;transition:border-color 0.15s,background 0.15s;
         font-size:0.82rem;color:var(--text-muted);">
-        &#128196; Choose CSV or drag &amp; drop
+        &#128196; Choose CSV / XLS / XLSX or drag &amp; drop
       </label>
-      <input type="file" id="csvFileInput" accept=".csv,text/csv" style="display:none" onchange="handleCsvFile(this)"/>
-      <div class="hint">Format: one order per row — <code style="font-size:0.75rem;background:var(--surface2);padding:1px 5px;border-radius:3px">ID,Width,Length</code> (header row auto-detected)</div>
+      <input type="file" id="csvFileInput" accept=".csv,.xls,.xlsx,text/csv" style="display:none" onchange="handleFileInput(this)"/>
+      <div class="hint">Required columns (by name): <code style="font-size:0.75rem;background:var(--surface2);padding:1px 5px;border-radius:3px">Equipment ID</code>, <code style="font-size:0.75rem;background:var(--surface2);padding:1px 5px;border-radius:3px">Width</code>, <code style="font-size:0.75rem;background:var(--surface2);padding:1px 5px;border-radius:3px">Length</code> — extra columns (Description, Lacing, etc.) are ignored</div>
     </div>
 
     <!-- Paste fallback -->
@@ -623,7 +625,7 @@ const CONFIG = {
   LENGTH_MARGIN:          0.5,           // production margin added to order length (feet)
   SHORT_LENGTH_THRESHOLD: 100,           // orders below this length must be produced lengthwise
   MAX_ORDERS:             500,           // practical limit on number of simultaneous orders
-  MAX_FILE_SIZE:          1 * 1024 * 1024, // 1 MB max CSV upload size
+  MAX_FILE_SIZE:          5 * 1024 * 1024, // 5 MB max upload size
 };
 
 // ──────────────────────────────────────────────
@@ -664,61 +666,137 @@ function addOrder() {
 }
 
 // ──────────────────────────────────────────────
-// CSV File Import
+// File Import  (CSV, XLS, XLSX)
 // ──────────────────────────────────────────────
-function handleCsvFile(input) {
+const EXCEL_EXTS = new Set(['xls', 'xlsx', 'xlsm', 'xlsb']);
+
+function fileExt(name) { return name.split('.').pop().toLowerCase(); }
+
+function handleFileInput(input) {
   const file = input.files[0];
+  if (file) handleFile(file);
+  input.value = ''; // reset so same file can be re-imported
+}
+
+function handleFile(file) {
   if (!file) return;
   if (file.size > CONFIG.MAX_FILE_SIZE) {
-    alert(`File is too large (${(file.size / 1024).toFixed(0)} KB). Maximum size is 1 MB.`);
-    input.value = '';
+    alert(`File is too large (${(file.size / 1024).toFixed(0)} KB). Maximum size is ${CONFIG.MAX_FILE_SIZE / 1024 / 1024} MB.`);
     return;
   }
+  const ext = fileExt(file.name);
   const reader = new FileReader();
-  reader.onload = e => {
-    parseCsvText(e.target.result, file.name);
-    input.value = ''; // reset so same file can be re-imported
-  };
-  reader.onerror = () => {
-    alert('Error reading file. Please check the file and try again.');
-    input.value = '';
-  };
-  reader.readAsText(file);
+  if (EXCEL_EXTS.has(ext)) {
+    reader.onload  = e => parseExcelBuffer(e.target.result, file.name);
+    reader.onerror = () => alert('Error reading file. Please check the file and try again.');
+    reader.readAsArrayBuffer(file);
+  } else {
+    reader.onload  = e => parseCsvText(e.target.result, file.name);
+    reader.onerror = () => alert('Error reading file. Please check the file and try again.');
+    reader.readAsText(file);
+  }
 }
+
+function parseExcelBuffer(arrayBuffer, sourceName) {
+  try {
+    const wb  = XLSX.read(arrayBuffer, { type: 'array' });
+    const ws  = wb.Sheets[wb.SheetNames[0]]; // always use first sheet
+    const csv = XLSX.utils.sheet_to_csv(ws, { blankrows: false });
+    parseCsvText(csv, sourceName);
+  } catch (err) {
+    alert('Could not parse Excel file: ' + err.message);
+  }
+}
+
+// Split one CSV line, respecting double-quoted fields (handles commas inside quotes)
+function splitCsvLine(line) {
+  const fields = [];
+  let field = '', inQuote = false, i = 0;
+  while (i < line.length) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuote && line[i + 1] === '"') { field += '"'; i += 2; continue; } // escaped ""
+      inQuote = !inQuote;
+    } else if (ch === ',' && !inQuote) {
+      fields.push(field.trim());
+      field = '';
+    } else {
+      field += ch;
+    }
+    i++;
+  }
+  fields.push(field.trim());
+  return fields;
+}
+
+// Normalize a header string: lowercase, strip all non-alphanumeric chars
+function normHdr(s) { return s.toLowerCase().replace(/[^a-z0-9]+/g, ''); }
 
 function parseCsvText(text, sourceName) {
   const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
   if (!lines.length) return;
 
-  // Detect header row: if any cell in the first row matches a known header keyword
-  const HEADER_RE = /^(id|order|order[-_ ]?id|width|w|length|len|l)$/i;
-  const firstParts = lines[0].split(',').map(s => s.trim());
-  const startIdx = firstParts.some(p => HEADER_RE.test(p)) ? 1 : 0;
+  const firstParts = splitCsvLine(lines[0]);
+
+  // Detect whether the first row is a header by looking for any known keyword
+  const KNOWN_HDRS = new Set(['id','order','orderid','equipmentid','width','w','length','len','l',
+                               'description','manufacturer','lacing','linecode','beltmaterial',
+                               'vgroovenonvgrove','vgroovenon','groove']);
+  const hasHeader = firstParts.some(p => KNOWN_HDRS.has(normHdr(p)));
+
+  // Map column indices from header names
+  let idCol = -1, widthCol = -1, lengthCol = -1;
+  let startIdx = 0;
+
+  if (hasHeader) {
+    startIdx = 1;
+    firstParts.forEach((h, i) => {
+      const n = normHdr(h);
+      if (idCol === -1 && /^(equipmentid|orderid|order|id)$/.test(n)) idCol = i;
+      if (/^w(idth)?$/.test(n))          widthCol  = i;
+      if (/^l(en(gth)?)?$/.test(n))      lengthCol = i;
+    });
+  }
+
+  // Fall back to positional when no recognised header columns were found
+  const positional = widthCol === -1 || lengthCol === -1;
 
   const errors = [];
   let added = 0;
+
   for (let i = startIdx; i < lines.length; i++) {
     if (orders.length >= CONFIG.MAX_ORDERS) {
       errors.push(`Order limit of ${CONFIG.MAX_ORDERS} reached — ${lines.length - i} row(s) skipped.`);
       break;
     }
-    const parts = lines[i].split(',').map(s => s.trim());
+    const parts = splitCsvLine(lines[i]);
+    // Skip completely empty rows (can happen in Excel exports)
+    if (parts.every(p => p === '')) continue;
+
     let id, width, length;
-    if (parts.length >= 3) {
-      id = parts[0] || `ORD-${String(nextSeq).padStart(3,'0')}`;
-      width  = parseFloat(parts[1]);
-      length = parseFloat(parts[2]);
-    } else if (parts.length === 2) {
-      id = `ORD-${String(nextSeq).padStart(3,'0')}`;
-      width  = parseFloat(parts[0]);
-      length = parseFloat(parts[1]);
+
+    if (positional) {
+      if (parts.length >= 3) {
+        id = parts[0] || `ORD-${String(nextSeq).padStart(3,'0')}`;
+        width  = parseFloat(parts[1]);
+        length = parseFloat(parts[2]);
+      } else if (parts.length === 2) {
+        id = `ORD-${String(nextSeq).padStart(3,'0')}`;
+        width  = parseFloat(parts[0]);
+        length = parseFloat(parts[1]);
+      } else {
+        errors.push(`Row ${i+1}: expected at least 2 columns`);
+        continue;
+      }
     } else {
-      errors.push(`Row ${i+1}: expected 2 or 3 columns`);
-      continue;
+      id     = (idCol >= 0 && parts[idCol]) ? parts[idCol] : `ORD-${String(nextSeq).padStart(3,'0')}`;
+      width  = parseFloat(parts[widthCol]);
+      length = parseFloat(parts[lengthCol]);
     }
+
     const v = validateOrder(width, length);
-    if (!v.widthOk)  { errors.push(`Row ${i+1}: invalid width "${parts[parts.length-2]}"`); continue; }
-    if (!v.lengthOk) { errors.push(`Row ${i+1}: invalid length "${parts[parts.length-1]}"`); continue; }
+    if (!v.widthOk)  { errors.push(`Row ${i+1} (${id}): invalid width "${parts[widthCol  ?? 1]}"`); continue; }
+    if (!v.lengthOk) { errors.push(`Row ${i+1} (${id}): invalid length "${parts[lengthCol ?? 2]}"`); continue; }
     orders.push({ seq: nextSeq++, id, width, length });
     added++;
   }
@@ -726,11 +804,11 @@ function parseCsvText(text, sourceName) {
   renderOrders();
   const label = document.getElementById('csvDropZone');
   if (added > 0) {
-    label.textContent = `✓ ${added} order${added!==1?'s':''} imported from ${sourceName || 'CSV'}`;
+    label.textContent = `✓ ${added} order${added!==1?'s':''} imported from ${sourceName || 'file'}`;
     label.style.color = 'var(--green)';
     label.style.borderColor = 'var(--green)';
     setTimeout(() => {
-      label.innerHTML = '&#128196; Choose CSV or drag &amp; drop';
+      label.innerHTML = '&#128196; Choose CSV / XLS / XLSX or drag &amp; drop';
       label.style.color = '';
       label.style.borderColor = '';
     }, 3000);
@@ -738,7 +816,7 @@ function parseCsvText(text, sourceName) {
   if (errors.length) alert('Some rows skipped:\n' + errors.join('\n'));
 }
 
-// Drag-and-drop on the CSV drop zone
+// Drag-and-drop on the file drop zone
 document.addEventListener('DOMContentLoaded', () => {
   const zone = document.getElementById('csvDropZone');
   zone.addEventListener('dragover', e => {
@@ -754,16 +832,7 @@ document.addEventListener('DOMContentLoaded', () => {
     e.preventDefault();
     zone.style.borderColor = '';
     zone.style.background  = '';
-    const file = e.dataTransfer.files[0];
-    if (!file) return;
-    if (file.size > CONFIG.MAX_FILE_SIZE) {
-      alert(`File is too large (${(file.size / 1024).toFixed(0)} KB). Maximum size is 1 MB.`);
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = ev => parseCsvText(ev.target.result, file.name);
-    reader.onerror = () => alert('Error reading file. Please check the file and try again.');
-    reader.readAsText(file);
+    handleFile(e.dataTransfer.files[0]);
   });
 });
 
