@@ -947,7 +947,6 @@ const SEG_COLORS = [
 
 function optimizeBelts(rawOrders) {
   const MAX_BELT_LENGTH = 600;          // maximum belt length (feet)
-  const LW_WASTE_LIMIT  = 0.20;         // don't stack lengthwise if it pushes waste above 20%
 
   // Compute required dimensions (order size + production margin)
   const processed = rawOrders.map(o => ({
@@ -1014,22 +1013,38 @@ function optimizeBelts(rawOrders) {
 
     if (!placed) {
       // Phase 2 — Lengthwise stacking: open a new section in an existing bin.
-      // Only allowed when the combined belt length stays ≤ 600 ft and the resulting
-      // waste percentage doesn't exceed the threshold.
-      let bestLenBin = null, bestLenWaste = Infinity;
+      // Accept if the marginal waste of adding here is ≤ the waste of a standalone
+      // belt (Phase 3).  This avoids penalising orders for width-mismatch waste
+      // that Phase 1 already introduced.
+      let bestLenBin = null, bestLenSaving = -Infinity;
+
+      // Phase 3 baseline: waste from giving this order its own belt
+      const standaloneW     = Math.max(MIN_WIDTH, order.reqWidth);
+      const standaloneWaste = ((standaloneW - order.reqWidth) / 12) * order.reqLength;
+
       for (const bin of bins) {
         const newLength = binLength(bin) + order.reqLength;
         if (newLength > MAX_BELT_LENGTH) continue;
 
-        const newMaxW  = Math.max(binMaxWidth(bin), order.reqWidth);
-        const beltW    = Math.max(MIN_WIDTH, newMaxW);
-        const totalA   = (beltW / 12) * newLength;
-        const usedA    = binUsedArea(bin) + (order.reqWidth / 12) * order.reqLength;
-        const wastePct = totalA > 0 ? (totalA - usedA) / totalA : 0;
+        // Belt waste BEFORE adding the order
+        const curMaxW  = binMaxWidth(bin);
+        const curBeltW = Math.max(MIN_WIDTH, curMaxW);
+        const curWaste = (curBeltW / 12) * binLength(bin) - binUsedArea(bin);
 
-        if (wastePct <= LW_WASTE_LIMIT && wastePct < bestLenWaste) {
-          bestLenBin  = bin;
-          bestLenWaste = wastePct;
+        // Belt waste AFTER adding the order as a new section
+        const newMaxW  = Math.max(curMaxW, order.reqWidth);
+        const newBeltW = Math.max(MIN_WIDTH, newMaxW);
+        const newWaste = (newBeltW / 12) * newLength
+                       - (binUsedArea(bin) + (order.reqWidth / 12) * order.reqLength);
+
+        // Marginal waste = additional waste caused by this order
+        const marginalWaste = newWaste - curWaste;
+
+        // Accept if stacking here wastes ≤ a standalone belt
+        const saving = standaloneWaste - marginalWaste;
+        if (saving >= 0 && saving > bestLenSaving) {
+          bestLenBin    = bin;
+          bestLenSaving = saving;
         }
       }
 
