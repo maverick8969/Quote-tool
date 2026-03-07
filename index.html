@@ -969,16 +969,20 @@ function optimizeBelts(rawOrders) {
 
     // Phase 1 — Best Fit Decreasing widthwise across all existing sections.
     // Find the section in any bin where this order fits with the least remaining slack.
+    // Also ensure placing the order here won't extend the belt past MAX_BELT_LENGTH.
     let bestBin = null, bestSection = null, bestSlack = Infinity;
     for (const bin of bins) {
       for (const section of bin.sections) {
         const newTotal = section.totalReqWidth + order.reqWidth;
         const slack    = MAX_WIDTH - newTotal;
-        if (slack >= 0 && slack < bestSlack) {
-          bestBin     = bin;
-          bestSection = section;
-          bestSlack   = slack;
-        }
+        if (slack < 0 || slack >= bestSlack) continue;
+        // If the order is longer than the current section max, the belt length grows.
+        const newBinLength = binLength(bin) - section.maxReqLength
+                           + Math.max(section.maxReqLength, order.reqLength);
+        if (newBinLength > MAX_BELT_LENGTH) continue;
+        bestBin     = bin;
+        bestSection = section;
+        bestSlack   = slack;
       }
     }
 
